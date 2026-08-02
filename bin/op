@@ -1,0 +1,924 @@
+#!/bin/sh
+# op -- Docker-backed 1Password CLI on OS X Mavericks, via the Linux `op` CLI in Docker.
+# Design: docs/superpowers/specs/2026-07-07-mavericks-1password-design.md
+set -u
+
+ONEP_CONFIG_DIR="${ONEP_CONFIG_DIR:-$HOME/.config/1p}"
+SESSION_FILE="$ONEP_CONFIG_DIR/session"
+DOCKER_ENV_FILE="$ONEP_CONFIG_DIR/docker-env"
+CONTAINER="${ONEP_CONTAINER:-op-gui}"
+VOLUME="${ONEP_VOLUME:-op-config}"
+GUI_VOLUME="${ONEP_GUI_VOLUME:-op-gui-data}"
+IMAGE="${ONEP_IMAGE:-mavericks-1password}"
+# The container hostname 1Password reports as the "device" name when a new app or
+# browser requests vault access. Without this it's an inscrutable Docker hash.
+GUI_HOSTNAME="${ONEP_GUI_HOSTNAME:-mavericks-1password}"
+MACHINE="${ONEP_MACHINE:-default}"
+# Container Tools for Mavericks manages the docker CLI through a 'mavericks' docker context that it
+# keeps pointed at the VM across restarts and DHCP renumbers. Prefer it (see load_docker_env) so op
+# never caches a host that can go stale. ONEP_DOCKER_CONTEXT overrides the name; set it empty to
+# opt out and fall back to the docker-machine env snapshot.
+DOCKER_CONTEXT_NAME="${ONEP_DOCKER_CONTEXT-mavericks}"
+# The xpra wire-protocol version the bundled Porthole viewer is written against
+# (major.minor). The container pins xpra to this line (templates/Dockerfile.tmpl);
+# a container built against a different major.minor may not speak to this viewer,
+# so `op gui` nudges a rebuild. Bump this together with the viewer + the template pin.
+PORTHOLE_XPRA_VERSION="${ONEP_XPRA_VERSION:-6.5}"
+CLIP_CLEAR_SECS="${ONEP_CLIP_CLEAR_SECS:-45}"
+SSH_AGENT_SOCK="${ONEP_SSH_AUTH_SOCK:-$HOME/.1password/agent.sock}"
+SSH_AGENT_PID="$ONEP_CONFIG_DIR/ssh-agent.pid"
+# The single consolidated 1Password instance runs under the xpra :100 entrypoint
+# on the persistent volume: HOME=/home/onepassword, XDG_RUNTIME_DIR=/run/user/1000.
+# Its SSH agent socket and browser-support socket live under those paths. (Before
+# consolidation there were two instances -- VNC + an ephemeral /tmp/opspike xpra
+# one -- and these had to point at whichever you actually VIEWED; now there is
+# only one.)
+SSH_REMOTE_SOCK="${ONEP_SSH_REMOTE_SOCK:-/home/onepassword/.1password/agent.sock}"
+# The browser-support socket is $XDG_RUNTIME_DIR/1Password-BrowserSupport.sock, so
+# the helper must run with the instance's HOME + runtime dir.
+APP_HOME="${ONEP_APP_HOME:-/home/onepassword}"
+APP_XDG_RUNTIME="${ONEP_APP_XDG_RUNTIME:-/run/user/1000}"
+LAUNCHD_LABEL="dev.modernmavericks.op-ssh-agent"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+WATCH_LAUNCHD_LABEL="dev.modernmavericks.op-watch"
+WATCH_LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$WATCH_LAUNCHD_LABEL.plist"
+WATCH_INTERVAL="${ONEP_WATCH_INTERVAL:-3}"
+# Porthole / xpra backend: local Unix-socket bridge to the container's xpra socket.
+XPRA_SOCK="${ONEP_XPRA_SOCK:-${TMPDIR:-/tmp}/1password-xpra.sock}"
+XPRA_TUNNEL_PID="$ONEP_CONFIG_DIR/xpra-tunnel.pid"
+# Auto-recovery watcher: relaunches the viewer if the backend drops (VM reboot / rebuild).
+# The watcher script path is resolved at use (gui_recover_watch) via the same symlink-aware
+# root as the app -- $0 here may be the /usr/local/bin or ~/bin symlink, not the real bin/.
+XPRA_WATCH_PID="$ONEP_CONFIG_DIR/xpra-watch.pid"
+# Lock-state channel: a background poller publishes "locked"/"unlocked" here (derived from
+# the xpra sock, so the Porthole viewer computes the same path) and the viewer polls it to
+# badge its menu-bar glyph with a padlock when locked.
+LOCK_STATE_FILE="${XPRA_SOCK%-xpra.sock}-lockstate"
+LOCK_POLL_PID="$ONEP_CONFIG_DIR/lock-poll.pid"
+LOCK_POLL_INTERVAL="${ONEP_LOCK_POLL_SECS:-2}"
+BROWSER_MANIFEST="${ONEP_BROWSER_MANIFEST:-$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/com.1password.1password.json}"
+BROWSER_EXT_ID="${ONEP_BROWSER_EXT_ID:-{d634138d-c276-4fc8-924b-40a0ea21d284}}"
+BROWSER_LAUNCHER="${ONEP_BROWSER_LAUNCHER:-$ONEP_CONFIG_DIR/op-browser-bridge}"
+
+die() { printf 'op: %s\n' "$1" >&2; exit "${2:-1}"; }
+
+usage() {
+  cat <<'EOF'
+usage: op <command> [arguments]
+
+  setup          one-time container + account setup
+  signin         start a session (asks master password)
+  signout        end the session
+  lock           lock the app (and browser/SSH/CLI) from the terminal
+  unlock         unlock the app from the terminal (asks master password; no VNC)
+  approve        authorize a pending 1Password prompt (e.g. SSH-key use); no VNC
+  watch          notify (Mac + terminal) when a prompt needs approving
+                 (watch install-launchd runs it in the background)
+  copy <item>    item's password -> clipboard, auto-clears after 45 s
+  otp <item>     item's one-time code -> clipboard, auto-clears
+  clip           stdin -> clipboard with the same auto-clear; pipe anything in
+  gui            open the 1Password GUI in the native Porthole viewer
+                 (gui stop: shut down)
+  ssh-agent ...  use 1Password's SSH agent from the Mac (start|stop|status|
+                 install-launchd|uninstall-launchd)
+  browser connect|disconnect   wire Momiji's 1Password extension to the app
+  op <args>      explicit pass-through (if a real op command ever
+                 shadows a name above)
+
+Anything not listed above passes through to the containerized `op` verbatim
+with the session applied: `op item list`, `op item get X`, `op vault list`,
+`op whoami`, ...
+EOF
+}
+
+ensure_config_dir() {
+  mkdir -p "$ONEP_CONFIG_DIR" 2>/dev/null
+  chmod 700 "$ONEP_CONFIG_DIR" 2>/dev/null
+  [ -w "$ONEP_CONFIG_DIR" ] || die "cannot write to $ONEP_CONFIG_DIR -- wrong owner? (a sudo'd run creates it as root; fix: sudo rm -rf $ONEP_CONFIG_DIR)"
+}
+
+# The real repo root of this script, resolving a /usr/local/bin or ~/bin symlink (and
+# relative/./bin/op invocation), so sibling assets (1password/, build-native/, bin/) are
+# found however op was invoked. $0 alone points at the symlink, not the real tree.
+gui_root() {
+  _s=$0
+  case $_s in /*) ;; *) _s="$(cd "$(dirname "$_s")" && pwd)/$(basename "$_s")" ;; esac
+  if [ -L "$_s" ]; then
+    _l=$(readlink "$_s")
+    case $_l in
+      /*) _s=$_l ;;
+      *) _s="$(cd "$(dirname "$_s")" && cd "$(dirname "$_l")" && pwd)/$(basename "$_l")" ;;
+    esac
+  fi
+  # -P: the PHYSICAL path (resolve any dir symlinks too). macOS `open` launches the viewer
+  # by its physical path, so the watcher's pgrep target (RW_BIN) must match that, not a
+  # logical path through a symlinked parent dir.
+  cd "$(dirname "$_s")/.." && pwd -P
+}
+
+gui_build_dir() { printf '%s/1password\n' "$(gui_root)"; }
+
+# The Porthole engine checkout: a sibling repo locally (ModernMavericks/porthole), or the
+# copy the pkg bundles. ONEP_PORTHOLE_DIR overrides; default is ../mavericks-porthole.
+porthole_dir() { printf '%s' "${ONEP_PORTHOLE_DIR:-$(cd "$(gui_root)/.." && pwd)/mavericks-porthole}"; }
+
+# The shared auto-recovery watcher script, resolved via gui_root (ONEP_RECOVER_WATCH overrides).
+gui_recover_watch() { printf '%s' "${ONEP_RECOVER_WATCH:-$(porthole_dir)/bin/porthole-recover-watch}"; }
+
+# Resolve the Porthole (native Cocoa Xpra viewer) app the same way.
+gui_porthole_app() {
+  [ -n "${ONEP_PORTHOLE_APP:-}" ] && { printf '%s' "$ONEP_PORTHOLE_APP"; return; }
+  _root=$(gui_root)
+  # dev/repo builds land at the repo-root build-native/ (the CMake super-project builds
+  # the engine viewer at build-native/porthole-viewer/Porthole.app); the pkg payload has
+  # it at porthole/viewer/.
+  if [ -d "$_root/build-native/porthole-viewer/Porthole.app" ]; then
+    printf '%s/build-native/porthole-viewer/Porthole.app' "$_root"
+  else
+    printf '%s/build-native/viewer/Porthole.app' "$(porthole_dir)"   # porthole built standalone
+  fi
+}
+
+# --- docker environment ------------------------------------------------------
+
+refresh_docker_env() {
+  ensure_config_dir
+  if docker-machine env "$MACHINE" 2>/dev/null | grep '^export ' > "$DOCKER_ENV_FILE.tmp" \
+     && [ -s "$DOCKER_ENV_FILE.tmp" ]; then
+    mv "$DOCKER_ENV_FILE.tmp" "$DOCKER_ENV_FILE"
+  else
+    rm -f "$DOCKER_ENV_FILE.tmp"
+    die "cannot determine Docker VM environment; try: docker-machine start $MACHINE"
+  fi
+}
+
+# Host prerequisites (RUNTIME=container-tools backend). Runs once, before we touch
+# Docker. Container Tools is a versioned sibling product that owns the Docker VM; it
+# exposes `docker-machine-ctl status` (one word) as its contract, which already folds
+# in the Fusion check and uses ITS OWN machine name -- so we reuse that instead of
+# re-detecting Fusion/VM here (one source of truth, no MACHINE-name drift). Report
+# only: never auto-start/create. Bypassed on an explicit endpoint (user chose their
+# own daemon) or ONEP_SKIP_PREFLIGHT=1.
+_PREFLIGHT_DONE=0
+preflight_host() {
+  [ "$_PREFLIGHT_DONE" = 1 ] && return 0
+  [ "${ONEP_SKIP_PREFLIGHT:-}" = 1 ] && return 0
+  [ -n "${DOCKER_HOST:-}" ] && return 0
+  [ -n "${DOCKER_CONTEXT:-}" ] && return 0
+  command -v docker-machine-ctl >/dev/null 2>&1 \
+    || die "Mavericks Container Tools not found -- install it (it provides the Docker VM 1Password runs in): https://github.com/ModernMavericks/container-tools"
+  _w=$(docker-machine-ctl status 2>/dev/null)
+  # Mark done only on a clean pass, so "done" means "preflight passed" (not merely
+  # "entered") -- keeps a future retry-on-transient path correct.
+  case $_w in
+    running) _PREFLIGHT_DONE=1; return 0 ;;
+    no-fusion) die "VMware Fusion is required -- Container Tools can't run the Docker VM without it; install or open VMware Fusion" ;;
+    absent) die "the Docker VM isn't set up yet -- run: docker-machine-ctl setup" ;;
+    stopped) die "the Docker VM is stopped -- start it: docker-machine-ctl start" ;;
+    creating) die "Container Tools is creating the Docker VM -- try again in a moment" ;;
+    working:*) die "Container Tools is busy (${_w#working:}) -- try again in a moment" ;;
+    *) die "Container Tools reports a problem -- check: docker-machine-ctl status" ;;
+  esac
+}
+
+load_docker_env() {
+  # Host prerequisites first (Container Tools -> Fusion), before any Docker use.
+  preflight_host
+  # An explicit DOCKER_HOST or DOCKER_CONTEXT in the environment always wins.
+  [ -n "${DOCKER_HOST:-}" ] && return 0
+  [ -n "${DOCKER_CONTEXT:-}" ] && return 0
+  # Prefer the Container Tools 'mavericks' docker context: it self-heals across VM restarts and
+  # DHCP renumbers (docker-machine-ctl sync_context), so there's no cached host to go stale -- the
+  # failure mode that broke `op gui` when the VM IP drifted. Fall back to a docker-machine env
+  # snapshot when the context isn't present (older setups without Container Tools).
+  if [ -n "$DOCKER_CONTEXT_NAME" ] && docker context inspect "$DOCKER_CONTEXT_NAME" >/dev/null 2>&1; then
+    DOCKER_CONTEXT="$DOCKER_CONTEXT_NAME"; export DOCKER_CONTEXT
+    return 0
+  fi
+  [ -f "$DOCKER_ENV_FILE" ] || refresh_docker_env
+  . "$DOCKER_ENV_FILE"
+}
+
+# --- rebuild nudges ----------------------------------------------------------
+# Advisory, non-fatal prompts to `op setup --rebuild`. Rate-limited to once per
+# calendar day per key via a marker file, so `op gui` doesn't nag on every launch.
+
+nudge_once() {   # $1 = key, $2 = message
+  ensure_config_dir
+  _stamp="$ONEP_CONFIG_DIR/nudged-$1"
+  _today=$(date '+%Y-%m-%d')
+  [ "$(cat "$_stamp" 2>/dev/null)" = "$_today" ] && return 0
+  printf '%s\n' "$_today" > "$_stamp" 2>/dev/null || true
+  printf 'op: %s\n' "$2" >&2
+}
+
+# Nudge when the container image is older than ONEP_STALE_DAYS (default 30). Age is
+# read from the image's created time; a parse failure is silent (never breaks gui).
+check_container_staleness() {
+  _days=${ONEP_STALE_DAYS:-30}
+  _created=$(docker image inspect -f '{{.Created}}' "$IMAGE" 2>/dev/null) || return 0
+  [ -n "$_created" ] || return 0
+  _created=${_created%%.*}        # drop fractional seconds (.000Z); a fraction takes the Z with it
+  _created=${_created%Z}          # no fraction -> the bare trailing Z is still here; drop it
+  _cepoch=$(date -ju -f '%Y-%m-%dT%H:%M:%S' "$_created" '+%s' 2>/dev/null) || return 0
+  _now=$(date -u '+%s')
+  _age=$(( (_now - _cepoch) / 86400 ))
+  [ "$_age" -gt "$_days" ] || return 0
+  nudge_once staleness "your $IMAGE container is ${_age} days old; rebuild to pick up updates: op setup --rebuild"
+}
+
+# Nudge when the container's running xpra differs (major.minor) from what the bundled
+# viewer expects. Unreadable version is silent (never breaks gui).
+check_xpra_compat() {
+  _raw=$(docker exec "$CONTAINER" xpra --version 2>/dev/null) || return 0
+  # e.g. "xpra v6.5.2-r0" -> "6.5.2-r0" -> major.minor "6.5"
+  _ver=${_raw##* }            # last field: "v6.5.2-r0" or "6.5.2-r0"
+  _ver=${_ver#v}
+  case $_ver in
+    [0-9]*.[0-9]*) ;; *) return 0 ;;   # unrecognized -> silent
+  esac
+  _mm=$(printf '%s' "$_ver" | cut -d. -f1,2)
+  [ "$_mm" = "$PORTHOLE_XPRA_VERSION" ] && return 0
+  nudge_once xpra-compat "this container's xpra ($_mm) differs from what the viewer expects ($PORTHOLE_XPRA_VERSION); a rebuild is recommended: op setup --rebuild"
+}
+
+# --- session -------------------------------------------------------------------
+
+read_session() {
+  [ -f "$SESSION_FILE" ] && cat "$SESSION_FILE"
+  return 0
+}
+
+save_session() {
+  ensure_config_dir
+  # umask in a subshell so the file is born 600 -- no chmod race window
+  (umask 077; printf '%s\n' "$1" > "$SESSION_FILE") 2>/dev/null \
+    || die "cannot write session file $SESSION_FILE"
+}
+
+# prompt for the master password without echo; leaves it in $_pw
+read_master_password() {
+  if [ -t 0 ]; then
+    trap 'stty echo 2>/dev/null; exit 130' INT TERM HUP
+    stty -echo
+  fi
+  printf 'Master password: ' >&2
+  IFS= read -r _pw || _pw=
+  if [ -t 0 ]; then
+    stty echo
+    trap - INT TERM HUP
+  fi
+  printf '\n' >&2
+}
+
+# if the master password ($1) is still on the clipboard (pasted), scrub it
+scrub_clipboard_if_pw() {
+  if [ "$(pbpaste 2>/dev/null)" = "$1" ]; then
+    printf '' | pbcopy
+    printf 'Cleared your master password from the clipboard.\n' >&2
+  fi
+}
+
+cmd_signin() {
+  load_docker_env
+  read_master_password
+  [ -n "$_pw" ] || die "empty password; not signing in"
+  _tok=$(printf '%s\n' "$_pw" | docker exec -i "$CONTAINER" op signin --raw)
+  _rc=$?
+  scrub_clipboard_if_pw "$_pw"
+  _pw=
+  [ "$_rc" -eq 0 ] && [ -n "$_tok" ] || die "sign-in failed"
+  save_session "$_tok"
+  printf 'Signed in; session cached (expires after ~30 minutes idle).\n' >&2
+}
+
+# --- app lock state (drive the containerized app's GUI, no VNC needed) --------
+
+# lock the desktop app (and everything riding its unlock) from the terminal
+cmd_lock() {
+  load_docker_env
+  docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" sh -c '
+    w=$(xdotool search --onlyvisible --name "1Password" 2>/dev/null | tail -1)
+    [ -n "$w" ] || exit 1
+    xdotool windowfocus --sync "$w"
+    xdotool key --clearmodifiers ctrl+shift+l' 2>/dev/null \
+    || die "could not reach the app to lock it; is it running? (op gui / op setup)"
+  printf 'Locked.\n' >&2
+}
+
+# unlock the desktop app from the terminal by typing the master password into
+# its lock screen on the container's Xvfb display -- no VNC/Screen Sharing.
+cmd_unlock() {
+  load_docker_env
+  if ! docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" \
+       xdotool search --name "Lock Screen" >/dev/null 2>&1; then
+    printf 'Already unlocked.\n' >&2
+    return 0
+  fi
+  read_master_password
+  [ -n "$_pw" ] || die "empty password; not unlocking"
+  printf '%s' "$_pw" | docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" sh -c '
+    w=$(xdotool search --name "Lock Screen" | head -1)
+    xdotool windowfocus --sync "$w"
+    xdotool key --clearmodifiers ctrl+a
+    xdotool type --clearmodifiers --file -
+    xdotool key --clearmodifiers Return'
+  scrub_clipboard_if_pw "$_pw"
+  _pw=
+  sleep 1
+  if docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" \
+       xdotool search --name "Lock Screen" >/dev/null 2>&1; then
+    die "unlock failed (still locked); check the master password"
+  fi
+  printf 'Unlocked.\n' >&2
+}
+
+# echo the window id of a pending "1Password Access Requested" dialog (its X
+# window is named exactly "1Password"), or nothing if there's no prompt up
+approval_window() {
+  docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" sh -c '
+    xdotool search --name "1Password" 2>/dev/null | while read w; do
+      [ "$(xdotool getwindowname "$w" 2>/dev/null)" = "1Password" ] && { printf "%s" "$w"; break; }
+    done' 2>/dev/null
+}
+
+# authorize a pending 1Password approval prompt (e.g. first SSH-key use) from
+# the terminal: type the master password into its dialog and submit -- no VNC.
+cmd_approve() {
+  load_docker_env
+  if [ -z "$(approval_window)" ]; then
+    printf 'No pending approval request.\n' >&2
+    return 0
+  fi
+  read_master_password
+  [ -n "$_pw" ] || die "empty password; not approving"
+  printf '%s' "$_pw" | docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" sh -c '
+    d=$(xdotool search --name "1Password" 2>/dev/null | while read w; do
+      [ "$(xdotool getwindowname "$w" 2>/dev/null)" = "1Password" ] && { echo "$w"; break; }; done)
+    [ -n "$d" ] || exit 1
+    xdotool windowfocus --sync "$d"
+    xdotool key --clearmodifiers ctrl+a
+    xdotool type --clearmodifiers --file -
+    xdotool key --clearmodifiers Return'
+  scrub_clipboard_if_pw "$_pw"
+  _pw=
+  sleep 1
+  [ -z "$(approval_window)" ] || die "approval failed (dialog still up); check the master password"
+  printf 'Approved.\n' >&2
+}
+
+# ping the Mac (notification + terminal bell) that a prompt needs `op approve`
+notify_approval() {
+  printf '\a' >&2
+  printf 'op: 1Password approval requested -- run: op approve\n' >&2
+  osascript -e 'display notification "1Password wants approval -- run: op approve" with title "op"' >/dev/null 2>&1
+}
+
+# watch for approval prompts and notify when one appears (foreground; Ctrl-C to
+# stop). `op watch install-launchd` runs it in the background via launchd.
+cmd_watch() {
+  case ${1:-} in
+    install-launchd)   install_launchd "$WATCH_LAUNCHD_LABEL" "$WATCH_LAUNCHD_PLIST" watch; return ;;
+    uninstall-launchd) uninstall_launchd "$WATCH_LAUNCHD_LABEL" "$WATCH_LAUNCHD_PLIST"; return ;;
+  esac
+  load_docker_env
+  printf 'Watching for 1Password approval prompts (Ctrl-C to stop)...\n' >&2
+  _seen=0
+  while :; do
+    if [ -n "$(approval_window)" ]; then
+      [ "$_seen" -eq 0 ] && { notify_approval; _seen=1; }
+    else
+      _seen=0
+    fi
+    sleep "$WATCH_INTERVAL"
+  done
+}
+
+cmd_signout() {
+  _sess=$(read_session)
+  # local kill switch first -- must work even when the VM is unreachable
+  rm -f "$SESSION_FILE"
+  if [ -n "$_sess" ]; then
+    (load_docker_env && docker exec -i "$CONTAINER" op signout --session "$_sess") >/dev/null 2>&1
+  fi
+  printf 'Signed out; local session cleared.\n'
+}
+
+# --- running op ----------------------------------------------------------------
+
+# NOTE: when op_run is called inside $(), a die/exit here terminates only the
+# subshell -- callers must check the substitution's exit status, e.g.:
+#   _val=$(op_run item get ...) || exit $?
+op_run() {
+  load_docker_env
+  _env_retried=0
+  _auth_retried=0
+  _errfile="${TMPDIR:-/tmp}/1p-stderr.$$"
+  # Live mode (human at a terminal): give op a real pty so prompts and colors
+  # work, streaming the merged output while also teeing it into _errfile for
+  # error classification. Captured mode (pipes, $(), scripts): today's quiet
+  # stderr capture, keeping stdout byte-clean.
+  case ${ONEP_INTERACTIVE:-} in
+    1) _live=1 ;;
+    0) _live=0 ;;
+    *) if [ -t 0 ] && [ -t 1 ]; then _live=1; else _live=0; fi ;;
+  esac
+  while :; do
+    _sess=$(read_session)
+    if [ "$_live" -eq 1 ]; then
+      _rcfile="$_errfile.rc"
+      if [ -n "$_sess" ]; then
+        { docker exec -it "$CONTAINER" op "$@" --session "$_sess" 2>&1
+          echo $? > "$_rcfile"; } | tee "$_errfile"
+      else
+        { docker exec -it "$CONTAINER" op "$@" 2>&1
+          echo $? > "$_rcfile"; } | tee "$_errfile"
+      fi
+      _rc=$(cat "$_rcfile" 2>/dev/null || echo 1)
+      rm -f "$_rcfile"
+    else
+      if [ -n "$_sess" ]; then
+        docker exec -i "$CONTAINER" op "$@" --session "$_sess" 2>"$_errfile"
+      else
+        docker exec -i "$CONTAINER" op "$@" 2>"$_errfile"
+      fi
+      _rc=$?
+    fi
+    if [ "$_rc" -eq 0 ]; then
+      [ "$_live" -eq 1 ] || cat "$_errfile" >&2
+      rm -f "$_errfile"
+      return 0
+    fi
+    if grep -qiE 'cannot connect|connection refused|no such host|i/o timeout|context deadline' "$_errfile"; then
+      if [ "$_env_retried" -eq 0 ]; then
+        _env_retried=1
+        rm -f "$_errfile"
+        refresh_docker_env
+        . "$DOCKER_ENV_FILE"
+        continue
+      fi
+      rm -f "$_errfile"
+      die "cannot reach the Docker VM; try: docker-machine start $MACHINE"
+    fi
+    if grep -qiE 'no such container|is not running' "$_errfile"; then
+      rm -f "$_errfile"
+      die "op container '$CONTAINER' is not available; run: op setup"
+    fi
+    if grep -qiE 'session expired|not currently signed in|not signed in|sign in to create a new session|401: authentication' "$_errfile"; then
+      if [ "$_auth_retried" -eq 0 ]; then
+        _auth_retried=1
+        rm -f "$_errfile"
+        cmd_signin || exit 1
+        continue
+      fi
+    fi
+    [ "$_live" -eq 1 ] || cat "$_errfile" >&2
+    rm -f "$_errfile"
+    return "$_rc"
+  done
+}
+
+# --- clipboard -------------------------------------------------------------------
+
+clip_put_with_autoclear() {
+  printf '%s' "$1" | pbcopy
+  (
+    sleep "$CLIP_CLEAR_SECS"
+    [ "$(pbpaste 2>/dev/null)" = "$1" ] && printf '' | pbcopy  # zero bytes = clear
+  ) >/dev/null 2>&1 &
+}
+
+# --- subcommands ---------------------------------------------------------------
+
+cmd_clip() {
+  [ ! -t 0 ] || die "usage: <command that prints a secret> | op clip" 2
+  _secret=$(cat)
+  [ -n "$_secret" ] || die "nothing on stdin to copy"
+  clip_put_with_autoclear "$_secret"
+  printf 'On the clipboard; auto-clears in %s seconds.\n' "$CLIP_CLEAR_SECS" >&2
+}
+
+# --- GUI ---------------------------------------------------------------------
+
+_vm_ip() { _ip=${DOCKER_HOST#tcp://}; printf '%s' "${_ip%%:*}"; }
+
+# Porthole backend: a local bridge to the container's xpra Unix socket, and on-demand
+# startup of the xpra session (:100) that runs 1Password. Same socat-over-exec bridge as
+# the ssh-agent tunnel, Unix on both ends, no published port.
+xpra_tunnel_bridge_cmd() {
+  printf 'docker exec -i %s socat STDIO UNIX-CONNECT:/run/user/1000/porthole-xpra.sock' "$CONTAINER"
+}
+xpra_tunnel_running() {
+  [ -f "$XPRA_TUNNEL_PID" ] || return 1
+  ps -p "$(cat "$XPRA_TUNNEL_PID")" >/dev/null 2>&1 || return 1
+  # The pid can outlive a usable tunnel: a racing `op gui` may have rm'd the socket
+  # (xpra_tunnel_start does `rm -f "$XPRA_SOCK"`), or socat can wedge -- leaving a live
+  # socat listening on a socket that no longer exists, so the viewer can't connect (it
+  # then sits windowless, or now self-terminates). So also require the socket file to be
+  # present; if it's gone the tunnel is broken and must be rebuilt.
+  [ -S "$XPRA_SOCK" ]
+}
+xpra_tunnel_start() {
+  command -v socat >/dev/null 2>&1 \
+    || die "socat not found on the Mac; install it (e.g. pkgin install socat)"
+  xpra_tunnel_running && return 0
+  # Not usable (dead, or a live pid whose socket got clobbered) -> tear down any stale
+  # socat before rebuilding, so we neither leak a listener nor reuse a broken one.
+  xpra_tunnel_stop
+  ensure_config_dir
+  rm -f "$XPRA_SOCK"
+  _exec="EXEC:$(xpra_tunnel_bridge_cmd | sed 's/:/\\:/g')"
+  socat "UNIX-LISTEN:$XPRA_SOCK,fork,reuseaddr" "$_exec" &
+  echo $! > "$XPRA_TUNNEL_PID"
+}
+xpra_tunnel_stop() {
+  if [ -f "$XPRA_TUNNEL_PID" ]; then
+    kill "$(cat "$XPRA_TUNNEL_PID")" 2>/dev/null
+    rm -f "$XPRA_TUNNEL_PID"
+  fi
+}
+xpra_backend_running() {
+  # "Running" = actually ACCEPTING CONNECTIONS on the xpra Unix socket, not merely that
+  # the process exists: a cold container binds the socket a beat after xpra appears, and
+  # opening the viewer in that gap yields "connection refused" / no window (and can leave
+  # 1Password's focus handshake stuck). python3 is always in the container.
+  docker exec "$CONTAINER" \
+    python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(1); sys.exit(s.connect_ex("/run/user/1000/porthole-xpra.sock"))' 2>/dev/null
+}
+xpra_backend_start() {
+  # The container entrypoint (start-1password-gui.sh) IS the xpra :100 backend, so we
+  # don't launch it here -- just wait for it to be serving on its socket (the container
+  # may have only just been (re)started). ~30s covers xpra + Xvfb + 1Password startup.
+  _i=0
+  while [ "$_i" -lt 150 ] && ! xpra_backend_running; do sleep 0.2; _i=$((_i + 1)); done
+  xpra_backend_running \
+    || die "the xpra backend (:100) never accepted connections in '$CONTAINER'; check: docker logs $CONTAINER"
+}
+
+# --- lock-state poller -------------------------------------------------------
+# Publish 1Password's lock state to LOCK_STATE_FILE for the Porthole viewer's menu-bar
+# glyph. 1Password shows a "Lock Screen" window iff locked (op's own unlock check). Write
+# atomically (temp + mv) so a reader never sees a half-written file.
+lock_state_write_once() {
+  if docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" \
+       xdotool search --name "Lock Screen" >/dev/null 2>&1; then _st=locked; else _st=unlocked; fi
+  printf '%s\n' "$_st" > "$LOCK_STATE_FILE.tmp" 2>/dev/null \
+    && mv -f "$LOCK_STATE_FILE.tmp" "$LOCK_STATE_FILE" 2>/dev/null
+}
+lock_poll_running() { [ -f "$LOCK_POLL_PID" ] && ps -p "$(cat "$LOCK_POLL_PID")" >/dev/null 2>&1; }
+lock_poll_start() {
+  lock_poll_running && return 0
+  ensure_config_dir
+  # Detached (closes stdin + fd 3) so the poll loop never holds a caller's descriptors.
+  ( while :; do lock_state_write_once; sleep "$LOCK_POLL_INTERVAL"; done ) </dev/null >/dev/null 2>&1 3>&- &
+  echo $! > "$LOCK_POLL_PID"
+}
+lock_poll_stop() {
+  if [ -f "$LOCK_POLL_PID" ]; then
+    kill "$(cat "$LOCK_POLL_PID")" 2>/dev/null
+    rm -f "$LOCK_POLL_PID"
+  fi
+  rm -f "$LOCK_STATE_FILE"
+}
+
+cmd_gui() {
+  load_docker_env
+  if [ "${1:-}" = "stop" ]; then
+    # Kill the auto-recovery watcher FIRST, else stopping the container disconnects the
+    # viewer -> marker -> the watcher fights us by relaunching.
+    if [ -f "$XPRA_WATCH_PID" ]; then
+      kill "$(cat "$XPRA_WATCH_PID")" 2>/dev/null
+      rm -f "$XPRA_WATCH_PID"
+    fi
+    lock_poll_stop
+    docker stop "$CONTAINER" >/dev/null || die "cannot stop container '$CONTAINER'"
+    xpra_tunnel_stop
+    printf 'GUI container stopped; CLI commands will fail until: op setup (or op gui)\n'
+    return 0
+  fi
+  if ! docker container inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true; then
+    docker start "$CONTAINER" >/dev/null 2>&1 \
+      || die "container '$CONTAINER' is not set up; run: op setup"
+  fi
+  check_container_staleness
+  check_xpra_compat
+
+  # Porthole (native Cocoa Xpra viewer). Starts the xpra backend on demand,
+  # tunnels to it, and launches the app pointed at the tunnel. No VNC.
+  xpra_backend_start
+  xpra_tunnel_start
+  # No -n: Porthole is a single-instance menu-bar app (it stays resident for its
+  # tray icon after you close the window). `open` without -n activates the
+  # running instance -- which re-shows the main window via applicationShould-
+  # HandleReopen -- instead of stacking a second process (and a second icon).
+  open "$(gui_porthole_app)" --args "$XPRA_SOCK" \
+    || die "could not launch Porthole"
+  printf '1Password GUI: launched Porthole -> %s\n' "$XPRA_SOCK"
+  # Auto-recovery watcher: relaunch the viewer if the backend drops (VM reboot / rebuild).
+  # 1Password's container is resident, so no on-demand stop -- recovery only. Guarded so a
+  # second `op gui` (or the watcher's own relaunch) doesn't stack watchers.
+  _recover_watch="$(gui_recover_watch)"
+  if [ -x "$_recover_watch" ] && [ -z "${ONEP_NO_RECOVER:-}" ] \
+     && ! { [ -f "$XPRA_WATCH_PID" ] && ps -p "$(cat "$XPRA_WATCH_PID")" >/dev/null 2>&1; }; then
+    RW_BIN="$(gui_porthole_app)/Contents/MacOS/Porthole" \
+    RW_MARKER="${XPRA_SOCK%-xpra.sock}-viewer-lost" \
+    RW_RELAUNCH="'$0' gui" RW_PIDFILE="$XPRA_WATCH_PID" \
+    nohup "$_recover_watch" </dev/null >/dev/null 2>&1 3>&- &
+  fi
+  # Publish 1Password's lock state so the viewer can badge its menu-bar glyph.
+  if [ -z "${ONEP_NO_LOCK_POLL:-}" ]; then lock_poll_start; fi
+}
+
+cmd_copy() {
+  [ $# -eq 1 ] || die "usage: op copy <item>" 2
+  _secret=$(op_run item get "$1" --fields password --reveal) || exit $?
+  [ -n "$_secret" ] || die "item '$1' has no password field"
+  clip_put_with_autoclear "$_secret"
+  printf 'Password for "%s" is on the clipboard; auto-clears in %s seconds.\n' "$1" "$CLIP_CLEAR_SECS"
+}
+
+cmd_otp() {
+  [ $# -eq 1 ] || die "usage: op otp <item>" 2
+  _code=$(op_run item get "$1" --otp) || exit $?
+  [ -n "$_code" ] || die "item '$1' has no one-time password"
+  clip_put_with_autoclear "$_code"
+  printf 'One-time code for "%s" is on the clipboard; auto-clears in %s seconds.\n' "$1" "$CLIP_CLEAR_SECS"
+}
+
+cmd_setup() {
+  _rebuild=0
+  [ "${1:-}" = "--rebuild" ] && _rebuild=1
+  load_docker_env
+  if [ "$_rebuild" -eq 1 ]; then
+    docker build --no-cache --pull -t "$IMAGE" "$(gui_build_dir)" \
+      || die "image build failed"
+    docker rm -f "$CONTAINER" >/dev/null 2>&1
+  elif ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "Building $IMAGE (downloads 1Password into the VM; takes a few minutes)..."
+    docker build -t "$IMAGE" "$(gui_build_dir)" || die "image build failed"
+  fi
+  docker volume create "$VOLUME" >/dev/null \
+    || die "cannot create Docker volume; is the VM up? Try: docker-machine start $MACHINE"
+  docker volume create "$GUI_VOLUME" >/dev/null \
+    || die "cannot create Docker volume '$GUI_VOLUME'"
+  if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+    docker start "$CONTAINER" >/dev/null \
+      || die "cannot start existing container '$CONTAINER'"
+  else
+    # --cap-add SYS_PTRACE lets the app read the non-dumpable browser-support
+    # helper's /proc to authenticate it (the browser-integration peer check);
+    # scoped to this single-purpose container.
+    docker run -d --name "$CONTAINER" --hostname "$GUI_HOSTNAME" \
+      --restart unless-stopped --init \
+      --shm-size 512m --security-opt seccomp=unconfined --cap-add SYS_PTRACE \
+      -e "GEOMETRY=${ONEP_GUI_GEOMETRY:-1440x900x24}" \
+      -v "$VOLUME:/root/.config/op" \
+      -v "$GUI_VOLUME:/home/onepassword/.config/1Password" \
+      "$IMAGE" >/dev/null \
+      || die "cannot create container '$CONTAINER'"
+  fi
+  # named volumes are born root:root 755; op refuses config dirs looser than 700
+  docker exec -i "$CONTAINER" chmod 700 /root/.config/op \
+    || die "cannot tighten permissions on the op config volume"
+  if [ "$CONTAINER" != "op-cli" ] && docker container inspect op-cli >/dev/null 2>&1; then
+    docker rm -f op-cli >/dev/null \
+      && echo "Retired the old op-cli container (volumes preserved)."
+  fi
+  _accounts=$(docker exec -i "$CONTAINER" op account list --format json)
+  case $_accounts in
+    ''|'[]')
+      echo "Adding your 1Password account; have your sign-in address, email,"
+      echo "Secret Key, and master password ready."
+      # -t only when we actually have a terminal; docker refuses -t otherwise
+      if [ -t 0 ]; then _tty=-it; else _tty=-i; fi
+      docker exec $_tty "$CONTAINER" op account add || die "op account add failed"
+      ;;
+    *)
+      echo "1Password account already configured."
+      ;;
+  esac
+  echo "Setup complete. Next: op signin   (GUI: op gui)"
+}
+
+# --- ssh agent ---------------------------------------------------------------
+
+socat_bridge_cmd() {
+  printf 'docker exec -i %s socat STDIO UNIX-CONNECT:%s' "$CONTAINER" "$SSH_REMOTE_SOCK"
+}
+
+ssh_agent_running() {
+  [ -f "$SSH_AGENT_PID" ] || return 1
+  # ps -p is portable and (unlike the kill builtin) stubbable in tests;
+  # BSD/macOS pgrep -F needs a pattern arg and won't work here
+  ps -p "$(cat "$SSH_AGENT_PID")" >/dev/null 2>&1
+}
+
+ssh_agent_remote_socket_present() {
+  load_docker_env
+  docker exec -i "$CONTAINER" test -S "$SSH_REMOTE_SOCK" >/dev/null 2>&1
+}
+
+ssh_agent_start() {
+  _foreground=0
+  [ "${1:-}" = "--foreground" ] && _foreground=1
+  command -v socat >/dev/null 2>&1 \
+    || die "socat not found on the Mac; install it (e.g. pkgin install socat)"
+  if ssh_agent_running; then
+    printf 'op ssh-agent already running (%s).\n' "$SSH_AGENT_SOCK"
+    printf 'export SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
+    return 0
+  fi
+  ssh_agent_remote_socket_present \
+    || die "the app's SSH agent socket isn't there yet; enable Settings -> Developer -> Use the SSH agent in the app (op gui)"
+  ensure_config_dir
+  rm -f "$SSH_AGENT_SOCK"
+  mkdir -p "$(dirname "$SSH_AGENT_SOCK")"
+  # socat treats ':' as an address-parameter separator, so the inner
+  # UNIX-CONNECT: colon must be escaped in the EXEC address
+  _exec="EXEC:$(socat_bridge_cmd | sed 's/:/\\:/g')"
+  if [ "$_foreground" -eq 1 ]; then
+    exec socat "UNIX-LISTEN:$SSH_AGENT_SOCK,fork,mode=600" "$_exec"
+  fi
+  socat "UNIX-LISTEN:$SSH_AGENT_SOCK,fork,mode=600" "$_exec" &
+  echo $! > "$SSH_AGENT_PID"
+  printf 'op ssh-agent started.\nexport SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
+}
+
+ssh_agent_stop() {
+  if [ -f "$SSH_AGENT_PID" ]; then
+    kill "$(cat "$SSH_AGENT_PID")" 2>/dev/null
+    rm -f "$SSH_AGENT_PID"
+  fi
+  rm -f "$SSH_AGENT_SOCK"
+  printf 'op ssh-agent stopped.\n'
+}
+
+ssh_agent_status() {
+  if ssh_agent_running; then
+    printf 'op ssh-agent: running (%s)\n' "$SSH_AGENT_SOCK"
+    return 0
+  fi
+  printf 'op ssh-agent: not running\n'
+  return 1
+}
+
+# $1 = Label; remaining args = the op subcommand for ProgramArguments
+launchd_plist_xml() {
+  _lbl=$1; shift
+  _op_abs=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+  cat <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$_lbl</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$_op_abs</string>
+XML
+  for _a in "$@"; do printf '    <string>%s</string>\n' "$_a"; done
+  cat <<XML
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+XML
+}
+
+# $1 = Label, $2 = plist path, remaining args = the op subcommand
+install_launchd() {
+  _lbl=$1; _plist=$2; shift 2
+  mkdir -p "$(dirname "$_plist")"
+  launchd_plist_xml "$_lbl" "$@" > "$_plist"
+  launchctl unload "$_plist" >/dev/null 2>&1
+  launchctl load "$_plist" || die "wrote $_plist but launchctl load failed"
+  printf 'Installed and loaded %s\n' "$_lbl"
+}
+
+# $1 = Label, $2 = plist path
+uninstall_launchd() {
+  launchctl unload "$2" >/dev/null 2>&1
+  rm -f "$2"
+  printf 'Uninstalled %s\n' "$1"
+}
+
+ssh_agent_install_launchd() {
+  install_launchd "$LAUNCHD_LABEL" "$LAUNCHD_PLIST" ssh-agent start --foreground
+}
+
+ssh_agent_uninstall_launchd() {
+  uninstall_launchd "$LAUNCHD_LABEL" "$LAUNCHD_PLIST"
+}
+
+cmd_ssh_agent() {
+  case ${1:-} in
+    start) shift; ssh_agent_start "$@" ;;
+    stop) ssh_agent_stop ;;
+    status) ssh_agent_status ;;
+    install-launchd) ssh_agent_install_launchd ;;
+    uninstall-launchd) ssh_agent_uninstall_launchd ;;
+    *) die "usage: op ssh-agent start|stop|status|install-launchd|uninstall-launchd" 2 ;;
+  esac
+}
+
+# --- browser integration -----------------------------------------------------
+
+# The container command that runs the real 1Password browser-support helper
+# under socat (its allowlisted parent, so name+permission browser verification
+# passes). Run as uid 1000 / gid 0 -- NOT the onepassword group -- so the
+# helper's setgid actually changes egid and its secure-mode (AT_SECURE) check
+# passes. The extension id is appended by browser_bridge_run.
+browser_bridge_cmd() {
+  printf 'docker exec -i -u 1000:0 -e HOME=%s -e XDG_RUNTIME_DIR=%s %s socat STDIO EXEC:/opt/1Password/1Password-BrowserSupport' "$APP_HOME" "$APP_XDG_RUNTIME" "$CONTAINER"
+}
+
+# Invoked by Momiji as the native-messaging host; a transparent byte pipe.
+# Firefox passes the manifest path then the extension id; the helper needs
+# the extension id as its argv, so forward the last argument.
+browser_bridge_run() {
+  load_docker_env
+  _extid=""
+  for _a in "$@"; do _extid=$_a; done
+  exec docker exec -i -u 1000:0 -e HOME="$APP_HOME" -e XDG_RUNTIME_DIR="$APP_XDG_RUNTIME" \
+    "$CONTAINER" socat STDIO "EXEC:/opt/1Password/1Password-BrowserSupport $_extid"
+}
+
+cmd_browser_bridge() {
+  browser_bridge_run "$@"
+}
+
+op_abs_path() {
+  _s=$0
+  [ -L "$_s" ] && _s=$(readlink "$_s")
+  case $_s in
+    /*) printf '%s\n' "$_s" ;;
+    *) printf '%s/%s\n' "$(cd "$(dirname "$0")" && pwd)" "$(basename "$_s")" ;;
+  esac
+}
+
+browser_manifest_json() {
+  cat <<JSON
+{
+  "name": "com.1password.1password",
+  "description": "1Password BrowserSupport (via op)",
+  "path": "$BROWSER_LAUNCHER",
+  "type": "stdio",
+  "allowed_extensions": ["$BROWSER_EXT_ID"]
+}
+JSON
+}
+
+cmd_browser() {
+  case ${1:-} in
+    connect)
+      command -v socat >/dev/null 2>&1 \
+        || die "socat not found on the Mac; install it (e.g. pkgin install socat)"
+      ensure_config_dir
+      # Momiji spawns this with a minimal PATH; bake in docker's dir so the
+      # bridge can find it (docker lives in /usr/local/bin, not on that PATH)
+      _dockerdir=$(dirname "$(command -v docker 2>/dev/null || echo /usr/local/bin/docker)")
+      printf '#!/bin/sh\nPATH="%s:$PATH"\nexport PATH\nexec "%s" _browser-bridge "$@"\n' \
+        "$_dockerdir" "$(op_abs_path)" > "$BROWSER_LAUNCHER"
+      chmod 755 "$BROWSER_LAUNCHER"
+      mkdir -p "$(dirname "$BROWSER_MANIFEST")"
+      browser_manifest_json > "$BROWSER_MANIFEST"
+      printf 'Wrote %s\nNow restart Momiji, then open the 1Password extension --\n' "$BROWSER_MANIFEST"
+      printf 'it should show "connected to 1Password for Linux".\n'
+      ;;
+    disconnect)
+      rm -f "$BROWSER_MANIFEST"
+      printf 'Removed %s (restart Momiji to fully disconnect).\n' "$BROWSER_MANIFEST"
+      ;;
+    *) die "usage: op browser connect|disconnect" 2 ;;
+  esac
+}
+
+main() {
+  [ $# -ge 1 ] || { usage >&2; exit 2; }
+  _cmd=$1; shift
+  case $_cmd in
+    setup)   cmd_setup "$@" ;;
+    signin)  cmd_signin "$@" ;;
+    signout) cmd_signout "$@" ;;
+    lock)    cmd_lock "$@" ;;
+    unlock)  cmd_unlock "$@" ;;
+    approve) cmd_approve "$@" ;;
+    watch)   cmd_watch "$@" ;;
+    copy)    cmd_copy "$@" ;;
+    otp)     cmd_otp "$@" ;;
+    clip)    cmd_clip "$@" ;;
+    gui)     cmd_gui "$@" ;;
+    ssh-agent) cmd_ssh_agent "$@" ;;
+    _browser-bridge) cmd_browser_bridge "$@" ;;
+    browser) cmd_browser "$@" ;;
+    browser-connect) cmd_browser connect ;;
+    browser-disconnect) cmd_browser disconnect ;;
+    op)      op_run "$@" ;;
+    help|-h|--help) usage ;;
+    *) op_run "$_cmd" "$@" ;;   # anything else goes straight to op
+  esac
+}
+
+# OP_LIB=1 source bin/op  loads the functions without dispatching (for unit tests)
+[ -n "${OP_LIB:-}" ] || main "$@"
