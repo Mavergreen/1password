@@ -1,79 +1,96 @@
 name: release
 
-# Build the unsigned mavericks-1password .pkg on macos-26 and, on a v* tag,
-# publish it to a GitHub Release. All-or-nothing: the single `publish` job is
-# the only thing that writes Releases and it `needs` the build, so a build
-# failure never ships a partial release.
+# mavericks-1password is a Porthole PRESET that PORTS 1Password, so it is versioned
+# <1password-version>-mavericks.N. 1Password has no public version feed, so UPSTREAM_VERSION is
+# HAND-bumped (the container floats to latest at first launch anyway -- UPDATE=float -- so the number
+# just names the release). The shipped .pkg is small: the preset conf + menu manifest + the bin/op CLI
+# (no compiler, no viewer, no container). Three entry points:
+#   - push to main        : build + gate; if UPSTREAM_VERSION has no release yet, auto-cut -mavericks.1
+#   - a *-mavericks.* tag  : publish that exact version
+#   - workflow_dispatch(local_release=true) : cut a -mavericks.(N+1) repackage
 
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:        # manual runs produce an artifact, not a release
+    branches: [main]
+    tags: ['*-mavericks.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      local_release:
+        description: "Cut a local -mavericks.(N+1) repackage for the current 1Password version"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'local_release' || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
 jobs:
-  build-macos:
-    runs-on: macos-26
+  build:
+    runs-on: macos-26   # pkgbuild/productbuild are macOS-only (the payload is arch-independent)
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      publish: ${{ steps.ver.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Determine version (VERSION file is the source of truth)
+      - name: Install mavericks-shared-cmake
+        uses: ModernMavericks/shared-cmake/.github/actions/install@v1
+
+      - name: Decide version + whether this run publishes
         id: ver
         run: |
-          VER=$(cat VERSION)
-          [ -n "$VER" ] || { echo "::error::VERSION file is empty"; exit 1; }
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$VER" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} != v$VER (VERSION file) — keep them in sync"
-            exit 1
+          set -eu
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            VER="$GITHUB_REF_NAME"; PUB=true
+          else
+            MODE=auto
+            if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "${{ inputs.local_release }}" = "true" ]; then
+              MODE=local
+            fi
+            OUT="$(sh build/version.sh "$MODE")"
+            VER="$(printf '%s\n' "$OUT" | sed -n 's/^FULL=//p')"
+            REL="$(printf '%s\n' "$OUT" | sed -n 's/^RELEASE=//p')"
+            [ "$GITHUB_REF_NAME" = main ] || REL=no
+            [ "$REL" = yes ] && PUB=true || PUB=false
           fi
+          { echo "version=$VER"; echo "publish=$PUB"; } >> "$GITHUB_OUTPUT"
+          echo "version=$VER publish=$PUB"
 
-      - name: Build .pkg
+      - name: Run the repo's tests
+        run: sh "$MSC_SCRIPTS/run-repo-tests.sh"
+
+      - name: Build the preset .pkg (conf + menu manifest + op CLI)
         run: |
+          set -eu
           sh packaging/macos/build_pkg.sh "${{ steps.ver.outputs.version }}" \
-            "mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
+             "dist/mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
 
-      - name: Sanity-check the pkg (payload, symlink, 10.9 floor)
+      - name: Collect the release-notes body into the artifact
         run: |
-          PKG="mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
-          pkgutil --payload-files "$PKG" | grep -E 'libexec/mavericks-1password/(bin/op|gui/)'
-          pkgutil --payload-files "$PKG" | grep -E '/usr/local/bin/op$'
-          pkgutil --expand "$PKG" /tmp/pkgx
-          grep -o 'os-version min="[0-9.]*"' /tmp/pkgx/Distribution
+          set -eu
+          NOTES="$(sh build/release-notes-file.sh "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.version }}" || true)"
+          if [ -n "$NOTES" ] && [ -s "$NOTES" ]; then cp "$NOTES" dist/RELEASE_NOTES.md
+          elif [ -s release-notes/README.md ]; then cp release-notes/README.md dist/RELEASE_NOTES.md
+          else printf '## Linux 1Password %s\n\nAutomated release.\n' "${{ steps.ver.outputs.version }}" > dist/RELEASE_NOTES.md; fi
 
-      - name: Upload build artifact (always)
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7
         with:
-          name: mavericks-1password-pkg
-          path: mavericks-1password-*.pkg
+          name: onepassword
+          path: dist/*
 
   publish:
-    needs: [build-macos]
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Download build artifact
-        uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Resolve release body (notes file if present, else generic)
-        id: body
-        run: |
-          NOTES="docs/release-notes/${GITHUB_REF_NAME}.md"
-          if [ -s "$NOTES" ]; then
-            echo "path=$NOTES" >> "$GITHUB_OUTPUT"
-          else
-            printf 'mavericks-1password %s\n\nDownload the .pkg below and follow the README (needs Docker for Mavericks).\n' \
-              "${GITHUB_REF_NAME}" > /tmp/body.md
-            echo "path=/tmp/body.md" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v3
-        with:
-          body_path: ${{ steps.body.outputs.path }}
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: dist/mavericks-1password-*.pkg
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    permissions:
+      contents: write
+    uses: ModernMavericks/shared-cmake/.github/workflows/publish-release.yml@v1
+    with:
+      version: ${{ needs.build.outputs.version }}
+      artifact: onepassword

@@ -116,28 +116,27 @@ gui_root() {
   cd "$(dirname "$_s")/.." && pwd -P
 }
 
-gui_build_dir() { printf '%s/1password\n' "$(gui_root)"; }
+# The materialized "Linux 1Password.app" that Porthole generates from this preset's conf. Its
+# Resources hold the container recipe + the generated launcher. ONEP_GUI_APP overrides (tests).
+gui_app() { printf '%s' "${ONEP_GUI_APP:-/Applications/Linux 1Password.app}"; }
 
-# The Porthole engine checkout: a sibling repo locally (ModernMavericks/porthole), or the
-# copy the pkg bundles. ONEP_PORTHOLE_DIR overrides; default is ../mavericks-porthole.
+# The container build context. Under the preset model Porthole renders it INTO the materialized app;
+# ONEP_GUI_BUILD_DIR overrides (tests/dev), else a sibling 1password/ if a checkout still has one.
+gui_build_dir() {
+  [ -n "${ONEP_GUI_BUILD_DIR:-}" ] && { printf '%s' "$ONEP_GUI_BUILD_DIR"; return; }
+  _mat="$(gui_app)/Contents/Resources/1password"
+  if [ -d "$_mat" ]; then printf '%s' "$_mat"; else printf '%s/1password' "$(gui_root)"; fi
+}
+
+# The Porthole engine: a sibling repo locally (ModernMavericks/porthole). ONEP_PORTHOLE_DIR overrides.
 porthole_dir() { printf '%s' "${ONEP_PORTHOLE_DIR:-$(cd "$(gui_root)/.." && pwd)/mavericks-porthole}"; }
 
-# The shared auto-recovery watcher script, resolved via gui_root (ONEP_RECOVER_WATCH overrides).
-gui_recover_watch() { printf '%s' "${ONEP_RECOVER_WATCH:-$(porthole_dir)/bin/porthole-recover-watch}"; }
+# The shared auto-recovery watcher, shipped inside the installed Porthole engine. ONEP_RECOVER_WATCH overrides.
+gui_recover_watch() { printf '%s' "${ONEP_RECOVER_WATCH:-/Applications/Porthole.app/Contents/Resources/engine/bin/porthole-recover-watch}"; }
 
-# Resolve the Porthole (native Cocoa Xpra viewer) app the same way.
-gui_porthole_app() {
-  [ -n "${ONEP_PORTHOLE_APP:-}" ] && { printf '%s' "$ONEP_PORTHOLE_APP"; return; }
-  _root=$(gui_root)
-  # dev/repo builds land at the repo-root build-native/ (the CMake super-project builds
-  # the engine viewer at build-native/porthole-viewer/Porthole.app); the pkg payload has
-  # it at porthole/viewer/.
-  if [ -d "$_root/build-native/porthole-viewer/Porthole.app" ]; then
-    printf '%s/build-native/porthole-viewer/Porthole.app' "$_root"
-  else
-    printf '%s/build-native/viewer/Porthole.app' "$(porthole_dir)"   # porthole built standalone
-  fi
-}
+# The shared Porthole viewer engine -- one installed app that every materialized viewer wraps
+# (was a per-product build under build-native/). ONEP_PORTHOLE_APP overrides.
+gui_porthole_app() { printf '%s' "${ONEP_PORTHOLE_APP:-/Applications/Porthole.app}"; }
 
 # --- docker environment ------------------------------------------------------
 

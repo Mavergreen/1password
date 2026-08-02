@@ -1,0 +1,9 @@
+name: conventions
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  conventions:
+    uses: ModernMavericks/shared-cmake/.github/workflows/family-conventions.yml@v1

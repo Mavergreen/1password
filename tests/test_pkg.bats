@@ -1,32 +1,51 @@
 #!/usr/bin/env bats
-# Verify the macOS .pkg assembles correctly: payload layout, the /usr/local/bin
-# symlink, the 10.9 install floor, and the identifier. Runs only where Apple's
-# pkg tooling exists (the Mavericks dev box and the macos CI runner).
+# The 1Password PRESET .pkg: it ships the parameter set (1password.conf + 1password.menu.json) and
+# the bin/op CLI; its postinstall asks Porthole to materialize "Linux 1Password.app". Runs only where
+# Apple's pkg tooling exists (the Mavericks dev box and the macOS CI runner).
 
 setup() {
-  command -v pkgbuild >/dev/null 2>&1 || skip "pkgbuild not available (macOS only)"
-  command -v productbuild >/dev/null 2>&1 || skip "productbuild not available"
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
-  WORK="$(mktemp -d "${TMPDIR:-/tmp}/1pm-pkgtest.XXXXXX")"
-  PKG="$WORK/out.pkg"
+  PORTHOLE_REPO="${PORTHOLE_DIR:-$REPO/../mavericks-porthole}"
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/op-pkg-test.XXXXXX")"
+}
+teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
+
+@test "the preset .pkg ships the conf, the menu manifest, and the op CLI + symlink" {
+  run sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  files="$(pkgutil --payload-files "$WORK/out.pkg")"
+  echo "$files" | grep -q 'Library/Application Support/Porthole/presets/1password.conf'
+  echo "$files" | grep -q 'Library/Application Support/Porthole/presets/1password.menu.json'
+  echo "$files" | grep -q 'usr/local/libexec/mavericks-1password/bin/op'
+  echo "$files" | grep -q 'usr/local/bin/op$'
 }
 
-teardown() { rm -rf "$WORK"; }
+@test "the .pkg declares a 10.9 floor and the 1password identifier" {
+  sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg" >/dev/null
+  pkgutil --expand "$WORK/out.pkg" "$WORK/x"
+  grep -q 'os-version min="10.9"' "$WORK/x/Distribution"
+  grep -q 'dev.modernmavericks.1password' "$WORK/x/Distribution"
+}
 
-@test "build_pkg.sh yields a pkg with the expected payload, symlink, floor, id" {
-  run sh "$REPO/packaging/macos/build_pkg.sh" 9.9.9 "$PKG"
-  [ "$status" -eq 0 ] || return 1
-  [ -f "$PKG" ] || return 1
+@test "preinstall refuses to install when Porthole is absent" {
+  sed 's#/usr/local/bin/porthole#/nope/porthole#g; s#/Applications/Porthole.app#/nope/Porthole.app#g' \
+    "$REPO/packaging/macos/scripts/preinstall" > "$WORK/pre"; chmod 755 "$WORK/pre"
+  run sh "$WORK/pre"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"needs Porthole installed"* ]]
+}
 
-  files="$(pkgutil --payload-files "$PKG")"
-  [[ "$files" == *"usr/local/libexec/mavericks-1password/bin/op"* ]] || return 1
-  [[ "$files" == *"usr/local/libexec/mavericks-1password/bin/porthole-recover-watch"* ]] || return 1
-  [[ "$files" == *"usr/local/libexec/mavericks-1password/1password/Dockerfile"* ]] || return 1
-  [[ "$files" == *"usr/local/libexec/mavericks-1password/1password/start-1password-gui.sh"* ]] || return 1
-  [[ "$files" == *"usr/local/bin/op"* ]] || return 1
+@test "postinstall invokes porthole materialize on the installed conf" {
+  grep -q 'materialize' "$REPO/packaging/macos/scripts/postinstall"
+  grep -q '/Library/Application Support/Porthole/presets/1password.conf' "$REPO/packaging/macos/scripts/postinstall"
+}
 
-  pkgutil --expand "$PKG" "$WORK/expand"
-  dist="$(cat "$WORK/expand/Distribution")"
-  [[ "$dist" == *'os-version min="10.9"'* ]] || return 1
-  [[ "$dist" == *'dev.modernmavericks.1password'* ]] || return 1
+@test "materialize turns the conf into Linux 1Password.app with a menu bar" {
+  [ -x "$PORTHOLE_REPO/bin/porthole" ] || skip "porthole engine not available as a sibling"
+  PORTHOLE_MATERIALIZE_NO_ICON=1 "$PORTHOLE_REPO/bin/porthole" \
+    materialize "$REPO/1password.conf" --apps-dir "$WORK/apps"
+  [ -d "$WORK/apps/Linux 1Password.app" ]
+  [ -f "$WORK/apps/Linux 1Password.app/Contents/Resources/menu.json" ]
+  [ -x "$WORK/apps/Linux 1Password.app/Contents/Resources/bin/1password" ]
+  grep -q 'Applications/Porthole.app' "$WORK/apps/Linux 1Password.app/Contents/Resources/bin/1password"
 }

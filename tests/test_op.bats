@@ -3,18 +3,9 @@
 
 load test_helper
 
-@test "start-1password-gui.sh (the consolidated entrypoint) is valid and runs xpra :100 on the volume with caps" {
-  script="${BATS_TEST_DIRNAME}/../1password/start-1password-gui.sh"
-  sh -n "$script" || return 1
-  # single instance, served by xpra on :100 (not Xvnc)
-  grep -q 'xpra start' "$script" || return 1
-  ! grep -q 'Xvnc' "$script" || return 1
-  # on the persistent volume, not the old ephemeral /tmp/opspike
-  grep -q 'HOME=/home/onepassword' "$script" || return 1
-  ! grep -q '/tmp/opspike' "$script" || return 1
-  # ambient CAP_SYS_PTRACE for browser-support peer auth survives the uid drop
-  grep -q 'ambient-caps +sys_ptrace' "$script" || return 1
-}
+# NOTE: the container recipe (start-1password-gui.sh, Dockerfile, child) is no longer this repo's
+# artifact -- Porthole renders it from templates/ at materialize time. Its content is covered by
+# Porthole's own template tests + test_1password.bats (which generates the recipe from the conf).
 
 @test "fresh setup builds image, creates container, prompts account add" {
   # 1 image inspect (absent), 2 build, 3 vol op-config, 4 vol op-gui-data,
@@ -113,12 +104,14 @@ load test_helper
   [[ "$(cat "$STUB_LOG")" == *"porthole-recover-watch"* ]] || return 1
 }
 
-@test "gui_recover_watch resolves the real script through a symlink (not \$0's dir)" {
-  ln -s "$OP" "$WORK/op-link"                 # invoked via a symlink, like ~/bin/op
-  run bash -c 'OP_LIB=1 source "$0"; gui_recover_watch' "$WORK/op-link"
+@test "gui_recover_watch points at the installed Porthole engine (ONEP_RECOVER_WATCH overrides)" {
+  # The watcher ships inside the installed Porthole engine now (was resolved $0-relative to a sibling
+  # porthole checkout). A fixed install path -- no symlink chasing.
+  run bash -c 'OP_LIB=1 source "$0"; gui_recover_watch' "$OP"
   [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *"/bin/porthole-recover-watch" ]] || return 1
-  [ -x "$output" ] || return 1                # the resolved path actually exists + is runnable
+  [ "$output" = "/Applications/Porthole.app/Contents/Resources/engine/bin/porthole-recover-watch" ] || { echo "$output"; return 1; }
+  run env ONEP_RECOVER_WATCH=/tmp/rw bash -c 'OP_LIB=1 source "$0"; gui_recover_watch' "$OP"
+  [ "$output" = "/tmp/rw" ] || { echo "$output"; return 1; }
 }
 
 @test "op gui stop kills the watcher before stopping the container" {

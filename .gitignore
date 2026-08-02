@@ -1,11 +1,9 @@
 docs/
 *.pkg
 .*.swp
-build*/
-
-# generate-viewer 1password emits this, but 1Password's real launcher is the
-# hand-maintained bin/op (op-gui container); ignore the generated stub to avoid a footgun.
-bin/1password
+# CMake/build OUTPUT dirs only -- NOT build/ (that holds the committed version wrappers).
+/_build/
+build-*/
 
 # Claude Code scratch dir (CLAUDE_CODE_TMPDIR)
 .tmp-claude/
@@ -13,3 +11,7 @@ bin/1password
 # macOS cruft (baseline parity with the other mavericks-* repos)
 ._*
 .DS_Store
+
+# Full version (<version>-mavericks.N): a build product, stamped at release. UPSTREAM_VERSION is committed.
+/VERSION
+/dist/
