@@ -33,10 +33,14 @@ include(Mavericks)
 enable_testing()
 find_program(BATS_EXECUTABLE bats)   # used by both the product tests here and the engine's
 
-# The Porthole engine is a separate ingredient repo (a sibling checkout locally, an
-# installed package once published). Build its viewer for this product's GUI. Override the
-# location with -DPORTHOLE_DIR=… (or the ONEP_PORTHOLE_DIR env for bin/op).
-set(PORTHOLE_DIR "${CMAKE_SOURCE_DIR}/../mavericks-porthole" CACHE PATH "Path to the porthole engine checkout")
+# Locate the Porthole engine (its viewer is built for this product's GUI): an explicit
+# -DPORTHOLE_DIR wins, then $PORTHOLE_DIR from the environment (porthole's install action
+# exports it in CI), then a sibling checkout for local dev. Never a hardcoded CI path.
+set(_ph_default "${CMAKE_SOURCE_DIR}/../mavericks-porthole")
+if(DEFINED ENV{PORTHOLE_DIR} AND NOT "$ENV{PORTHOLE_DIR}" STREQUAL "")
+  set(_ph_default "$ENV{PORTHOLE_DIR}")
+endif()
+set(PORTHOLE_DIR "${_ph_default}" CACHE PATH "Path to the porthole engine (sibling locally; install action sets it in CI)")
 if(NOT EXISTS "${PORTHOLE_DIR}/viewer/CMakeLists.txt")
   message(FATAL_ERROR "porthole engine not found at ${PORTHOLE_DIR} -- clone ModernMavericks/porthole as a sibling, or set -DPORTHOLE_DIR")
 endif()
