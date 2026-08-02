@@ -1,0 +1,7 @@
+#!/bin/sh
+# Stub Mavericks Container Tools ctl: the preflight (op's preflight_host) calls
+# `docker-machine-ctl status`. Report a healthy VM so preflight passes and the
+# routing/behavior under test runs. Override per-test by putting a different stub
+# earlier on PATH (see test_preflight.bats' ctl_returns helper).
+[ "${1:-}" = status ] && echo running
+exit 0
