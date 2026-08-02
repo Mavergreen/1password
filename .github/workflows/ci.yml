@@ -1,0 +1,61 @@
+name: CI
+
+# Validate every push and PR: run the BATS suite and build+sanity-check the pkg.
+# No publishing here — releases happen only on v* tags (see release.yml).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    name: Test + build pkg
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install bats
+        run: brew install bats-core
+
+      - name: Run the BATS suite
+        run: make test
+
+      - name: Build the pkg and sanity-check it
+        run: |
+          VER=$(cat VERSION)
+          sh packaging/macos/build_pkg.sh "$VER" "mavericks-1password-$VER.pkg"
+          pkgutil --payload-files "mavericks-1password-$VER.pkg" | grep -E 'libexec/mavericks-1password/(bin/op|gui/)'
+          pkgutil --payload-files "mavericks-1password-$VER.pkg" | grep -E '/usr/local/bin/op$'
+          pkgutil --expand "mavericks-1password-$VER.pkg" /tmp/pkgx
+          grep -o 'os-version min="[0-9.]*"' /tmp/pkgx/Distribution
+
+  # 10.9-safety gate for the native Porthole viewer (bin/op's default GUI client),
+  # built through the shared mavericks-shared-cmake conventions: CI installs it via the
+  # @v1 action, and find_package + include(Mavericks) run the AppleClang gate while
+  # mavericks_assert_binary_compatible(Porthole) fails the build if the cross-built binary imports a
+  # post-10.9 symbol. macos-26 is a modern host -> cross mode.
+  cmake-10_9-gate:
+    name: CMake 10.9-safety gate (Porthole via mavericks-shared-cmake)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      # shared-cmake installs itself via its own action (HTTPS via the runner token). It self-registers
+      # in the user package registry, so find_package resolves it downstream with no CMAKE_PREFIX_PATH.
+      - name: Install mavericks-shared-cmake
+        uses: ModernMavericks/shared-cmake/.github/actions/install@v1
+
+      - name: Ensure Rosetta (the x86_64 @ 10.9 codec test runs under it)
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      # Porthole is plain Cocoa/Foundation ObjC (no kext), so the modern SDK +
+      # -mmacosx-version-min=10.9 is enough -- no 10.9 SDK fetch needed. The compat
+      # guard runs as a build-time POST_BUILD (static otool check; no Rosetta).
+      - name: Configure + build (x86_64 @ 10.9) — compat guard gates Porthole
+        run: |
+          cmake --preset cross
+          cmake --build build-cross
+          echo "Porthole slice:"; lipo -info build-cross/porthole/viewer/Porthole.app/Contents/MacOS/Porthole
+
+      - name: Off-device codec test (Rosetta)
+        run: ctest --preset cross -R '^protocol$' --output-on-failure

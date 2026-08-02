@@ -1,0 +1,15 @@
+docs/
+*.pkg
+.*.swp
+build*/
+
+# generate-viewer 1password emits this, but 1Password's real launcher is the
+# hand-maintained bin/op (op-gui container); ignore the generated stub to avoid a footgun.
+bin/1password
+
+# Claude Code scratch dir (CLAUDE_CODE_TMPDIR)
+.tmp-claude/
+
+# macOS cruft (baseline parity with the other mavericks-* repos)
+._*
+.DS_Store

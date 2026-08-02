@@ -1,0 +1,79 @@
+name: release
+
+# Build the unsigned mavericks-1password .pkg on macos-26 and, on a v* tag,
+# publish it to a GitHub Release. All-or-nothing: the single `publish` job is
+# the only thing that writes Releases and it `needs` the build, so a build
+# failure never ships a partial release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:        # manual runs produce an artifact, not a release
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Determine version (VERSION file is the source of truth)
+        id: ver
+        run: |
+          VER=$(cat VERSION)
+          [ -n "$VER" ] || { echo "::error::VERSION file is empty"; exit 1; }
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$VER" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} != v$VER (VERSION file) — keep them in sync"
+            exit 1
+          fi
+
+      - name: Build .pkg
+        run: |
+          sh packaging/macos/build_pkg.sh "${{ steps.ver.outputs.version }}" \
+            "mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
+
+      - name: Sanity-check the pkg (payload, symlink, 10.9 floor)
+        run: |
+          PKG="mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
+          pkgutil --payload-files "$PKG" | grep -E 'libexec/mavericks-1password/(bin/op|gui/)'
+          pkgutil --payload-files "$PKG" | grep -E '/usr/local/bin/op$'
+          pkgutil --expand "$PKG" /tmp/pkgx
+          grep -o 'os-version min="[0-9.]*"' /tmp/pkgx/Distribution
+
+      - name: Upload build artifact (always)
+        uses: actions/upload-artifact@v7
+        with:
+          name: mavericks-1password-pkg
+          path: mavericks-1password-*.pkg
+
+  publish:
+    needs: [build-macos]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download build artifact
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Resolve release body (notes file if present, else generic)
+        id: body
+        run: |
+          NOTES="docs/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -s "$NOTES" ]; then
+            echo "path=$NOTES" >> "$GITHUB_OUTPUT"
+          else
+            printf 'mavericks-1password %s\n\nDownload the .pkg below and follow the README (needs Docker for Mavericks).\n' \
+              "${GITHUB_REF_NAME}" > /tmp/body.md
+            echo "path=/tmp/body.md" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: ${{ steps.body.outputs.path }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/mavericks-1password-*.pkg
