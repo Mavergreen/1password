@@ -101,7 +101,9 @@ load test_helper
   export ONEP_RECOVER_WATCH="${BATS_TEST_DIRNAME}/stubs/porthole-recover-watch"
   run "$OP" gui
   [ "$status" -eq 0 ] || return 1
-  [[ "$(cat "$STUB_LOG")" == *"porthole-recover-watch"* ]] || return 1
+  # The watcher is spawned with `nohup … &`, so wait for its log line rather than racing it.
+  for _ in $(seq 1 40); do grep -q 'porthole-recover-watch' "$STUB_LOG" && break; sleep 0.1; done
+  grep -q 'porthole-recover-watch' "$STUB_LOG" || { cat "$STUB_LOG"; return 1; }
 }
 
 @test "gui_recover_watch points at the installed Porthole engine (ONEP_RECOVER_WATCH overrides)" {
