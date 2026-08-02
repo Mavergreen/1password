@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refuse to install without Docker for Mavericks (docker-machine). The installer
+# runs scripts as root, whose PATH may omit /usr/local/bin, so check both.
+if ! command -v docker-machine >/dev/null 2>&1 \
+   && [ ! -x /usr/local/bin/docker-machine ]; then
+  echo "mavericks-1password needs Docker for Mavericks (docker-machine) installed first." >&2
+  echo "Install it (see the project README), then run this installer again." >&2
+  exit 1
+fi
+exit 0

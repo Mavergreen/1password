@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>1Password for Mavericks (op)</title>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64"/>
+    <volume-check>
+        <allowed-os-versions><os-version min="10.9"/></allowed-os-versions>
+    </volume-check>
+    <choices-outline><line choice="default"/></choices-outline>
+    <choice id="default" title="op">
+        <pkg-ref id="dev.modernmavericks.1password"/>
+    </choice>
+    <pkg-ref id="dev.modernmavericks.1password" version="0">mavericks-1password-component.pkg</pkg-ref>
+</installer-gui-script>
