@@ -19,9 +19,10 @@ setup() {
 
 teardown() { rm -rf "$GEN"; }
 
-@test "1Password Dockerfile installs 1password from AgileBits' apt repo + xpra, not VNC" {
+@test "1Password Dockerfile installs 1password from AgileBits' apt repo, on the shared base" {
+  grep -q 'FROM ghcr.io/modernmavericks/porthole-base' "$DF" || return 1   # xpra/Xvfb runtime is in the base
   grep -q 'downloads.1password.com/linux' "$DF" || return 1
-  grep -q 'apt-get install -y 1password 1password-cli xpra=6.5.2-r0-1 xvfb' "$DF" || return 1
+  grep -qE 'apt-get install -y --no-install-recommends 1password 1password-cli' "$DF" || return 1
 }
 
 @test "1Password sheds the entire VNC/openbox legacy stack" {
@@ -41,8 +42,8 @@ teardown() { rm -rf "$GEN"; }
   grep -q 'useradd -m -u 1000 -g onepassword onepassword' "$DF" || return 1
 }
 
-@test "1Password Dockerfile installs the op-CLI support packages" {
-  grep -qE 'socat xdotool wmctrl x11-utils' "$DF" || return 1
+@test "1Password Dockerfile installs the op-CLI support packages (socat is in the base)" {
+  grep -qE 'xdotool wmctrl x11-utils' "$DF" || return 1   # socat moved to the shared base
 }
 
 @test "1Password Dockerfile writes the browser-support allowlist (EXTRA_SETUP)" {
