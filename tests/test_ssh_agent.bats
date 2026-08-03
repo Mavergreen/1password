@@ -4,9 +4,9 @@
 load test_helper
 
 @test "socat_bridge_cmd targets the app agent socket (sourced unit)" {
-  run bash -c 'OP_LIB=1 source "$0"; socat_bridge_cmd' "$OP"
+  run bash -c 'OP_LIB=1 source "$0"; CONTAINER=1password-gui; socat_bridge_cmd' "$OP"
   [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *"docker exec -i op-gui socat STDIO UNIX-CONNECT:/home/onepassword/.1password/agent.sock"* ]] || return 1
+  [[ "$output" == *"docker exec -i 1password-gui socat STDIO UNIX-CONNECT:/home/onepassword/.1password/agent.sock"* ]] || return 1
 }
 
 @test "ssh-agent start launches the socat listener (escaped colon)" {
@@ -15,7 +15,7 @@ load test_helper
   [ "$status" -eq 0 ] || return 1
   log="$(cat "$STUB_LOG")"
   [[ "$log" == *"socat UNIX-LISTEN:"* ]] || return 1
-  [[ "$log" == *'EXEC:docker exec -i op-gui socat STDIO UNIX-CONNECT\:/home/onepassword/.1password/agent.sock'* ]] || return 1
+  [[ "$log" == *'EXEC:docker exec -i 1password-gui socat STDIO UNIX-CONNECT\:/home/onepassword/.1password/agent.sock'* ]] || return 1
   [[ "$output" == *"export SSH_AUTH_SOCK="* ]] || return 1
 }
 

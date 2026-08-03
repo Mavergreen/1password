@@ -14,7 +14,7 @@ load test_helper
   run "$OP" vault list
   [ "$status" -eq 0 ] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"exec -i op-gui op vault list"* ]] || return 1
+  [[ "$log" == *"exec -i 1password-gui op vault list"* ]] || return 1
 }
 
 @test "interactive mode uses tty exec" {
@@ -23,7 +23,7 @@ load test_helper
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *"vaults here"* ]] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"exec -it op-gui op vault list"* ]] || return 1
+  [[ "$log" == *"exec -it 1password-gui op vault list"* ]] || return 1
 }
 
 @test "interactive mode propagates exit code" {
@@ -71,7 +71,7 @@ load test_helper
   [ "$(cat "$ONEP_CONFIG_DIR/session")" = "TOKEN123" ] || return 1
   [ "$(stat -f %Lp "$ONEP_CONFIG_DIR/session")" = "600" ] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"exec -i op-gui op signin --raw"* ]] || return 1
+  [[ "$log" == *"exec -i 1password-gui op signin --raw"* ]] || return 1
 }
 
 @test "signin refuses empty password" {
@@ -128,7 +128,7 @@ load test_helper
 }
 
 @test "missing container suggests setup" {
-  echo 'Error: No such container: op-gui' > "$STUB_DIR/docker.stderr"
+  echo 'Error: No such container: 1password-gui' > "$STUB_DIR/docker.stderr"
   echo 1 > "$STUB_DIR/docker.exit"
   run "$OP" op whoami
   [ "$status" -eq 1 ] || return 1

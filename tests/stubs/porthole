@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stub porthole: logs the invocation so tests can assert op delegates container
+# lifecycle to `porthole up` instead of building/running a container itself.
+printf 'porthole %s\n' "$*" >> "$STUB_LOG"
+exit 0

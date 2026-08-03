@@ -7,85 +7,53 @@ load test_helper
 # artifact -- Porthole renders it from templates/ at materialize time. Its content is covered by
 # Porthole's own template tests + test_1password.bats (which generates the recipe from the conf).
 
-@test "fresh setup builds image, creates container, prompts account add" {
-  # 1 image inspect (absent), 2 build, 3 vol op-config, 4 vol op-gui-data,
-  # 5 container inspect op-gui (absent), 6 run, 7 chmod, 8 container inspect
-  # op-cli (absent), 9 account list (empty), 10 account add
-  echo 1 > "$STUB_DIR/docker.exit.1"
-  echo 1 > "$STUB_DIR/docker.exit.5"
-  echo 1 > "$STUB_DIR/docker.exit.8"
-  echo '[]' > "$STUB_DIR/docker.stdout.9"
+# op no longer builds/runs/names its OWN container. Porthole is the single creator: `op setup`
+# delegates to `porthole up <spec>` (the porthole stub logs it), then op only chmods the CLI-config
+# volume + adds the account via `docker exec` into the Porthole-named container (1password-gui).
+@test "fresh setup brings the container up via Porthole and prompts account add" {
+  # docker calls: 1 chmod, 2 account list (empty -> add), 3 account add
+  echo '[]' > "$STUB_DIR/docker.stdout.2"
   run "$OP" setup
-  [ "$status" -eq 0 ] || return 1
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"build -t mavericks-1password"* ]] || return 1
-  [[ "$log" == *"volume create op-config"* ]] || return 1
-  [[ "$log" == *"volume create op-gui-data"* ]] || return 1
-  [[ "$log" == *"run -d --name op-gui --hostname mavericks-1password --restart unless-stopped --init --shm-size 512m --security-opt seccomp=unconfined --cap-add SYS_PTRACE -e GEOMETRY=1440x900x24 -v op-config:/root/.config/op -v op-gui-data:/home/onepassword/.config/1Password mavericks-1password"* ]] || return 1
-  [[ "$log" != *"-p 5900"* ]] || return 1
+  [[ "$log" == *"porthole up "*"1password.container"* ]] || { echo "$log"; return 1; }
+  [[ "$log" != *"docker build"* ]] || return 1        # op builds nothing itself now
+  [[ "$log" != *"run -d --name"* ]] || return 1        # op runs no container itself now
   [[ "$log" == *"chmod 700 /root/.config/op"* ]] || return 1
-  [[ "$log" == *"op-gui op account add"* ]] || return 1
+  [[ "$log" == *"1password-gui op account add"* ]] || return 1
   [[ "$output" == *"op signin"* ]] || return 1
 }
 
-@test "setup existing container and account" {
-  # 1 image inspect ok, 2 vol, 3 vol, 4 container inspect op-gui ok, 5 start,
-  # 6 chmod, 7 container inspect op-cli (absent), 8 account list (configured)
-  echo 1 > "$STUB_DIR/docker.exit.7"
-  printf '[{"url":"my.1password.com"}]\n' > "$STUB_DIR/docker.stdout.8"
+@test "setup with an account already configured skips account add" {
+  printf '[{"url":"my.1password.com"}]\n' > "$STUB_DIR/docker.stdout.2"   # account list (call 2)
   run "$OP" setup
   [ "$status" -eq 0 ] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" != *" build "* ]] || return 1
-  [[ "$log" == *"start op-gui"* ]] || return 1
+  [[ "$log" == *"porthole up "* ]] || return 1
   [[ "$log" != *"account add"* ]] || return 1
   [[ "$output" == *"already configured"* ]] || return 1
 }
 
-@test "setup rebuild forces fresh image and container" {
-  # 1 build --no-cache --pull, 2 rm -f op-gui, 3 vol, 4 vol,
-  # 5 container inspect op-gui (absent), 6 run, 7 chmod,
-  # 8 container inspect op-cli (absent), 9 account list (configured)
-  echo 1 > "$STUB_DIR/docker.exit.5"
-  echo 1 > "$STUB_DIR/docker.exit.8"
-  printf '[{"url":"x"}]\n' > "$STUB_DIR/docker.stdout.9"
+@test "setup --rebuild passes --rebuild through to porthole up" {
+  printf '[{"url":"x"}]\n' > "$STUB_DIR/docker.stdout.2"
   run "$OP" setup --rebuild
-  [ "$status" -eq 0 ] || return 1
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"build --no-cache --pull -t mavericks-1password"* ]] || return 1
-  [[ "$log" == *"rm -f op-gui"* ]] || return 1
-}
-
-@test "setup retires old op cli container" {
-  # 1 image inspect ok, 2 vol, 3 vol, 4 container inspect op-gui ok, 5 start,
-  # 6 chmod, 7 container inspect op-cli OK, 8 rm -f op-cli,
-  # 9 account list (configured)
-  printf '[{"url":"x"}]\n' > "$STUB_DIR/docker.stdout.9"
-  run "$OP" setup
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"rm -f op-cli"* ]] || return 1
-  [[ "$output" == *"Retired"* ]] || return 1
-}
-
-@test "op gui starts container when stopped" {
-  echo 'false' > "$STUB_DIR/docker.stdout.1"   # running probe
-  run "$OP" gui
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"start op-gui"* ]] || return 1
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$(cat "$STUB_LOG")" == *"porthole up --rebuild "*"1password.container"* ]] || { cat "$STUB_LOG"; return 1; }
 }
 
 @test "op gui stop quits the viewer app and stops the container" {
   run "$OP" gui stop
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-  [[ "$(cat "$STUB_LOG")" == *"stop op-gui"* ]] || { cat "$STUB_LOG"; return 1; }   # container stopped
+  [[ "$(cat "$STUB_LOG")" == *"stop 1password-gui"* ]] || { cat "$STUB_LOG"; return 1; }   # container stopped
 }
 
-@test "op gui opens the materialized Linux 1Password.app (a distinct app that owns the viewer)" {
-  echo 'true' > "$STUB_DIR/docker.stdout.1"   # container running probe
+@test "op gui opens the materialized Linux 1Password.app (whose launcher owns the container + viewer)" {
   run "$OP" gui
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   [[ "$(cat "$STUB_LOG")" == *"open"*"Linux 1Password.app"* ]] || { cat "$STUB_LOG"; return 1; }
   [[ "$output" == *"opened "*"Linux 1Password.app"* ]] || return 1
+  # op no longer starts the container or runs docker itself for gui -- the app/launcher does
+  [[ "$(cat "$STUB_LOG")" != *"docker start"* ]] || { cat "$STUB_LOG"; return 1; }
 }
 
 # op gui no longer runs the viewer OR its recovery watcher itself: the materialized "Linux
@@ -263,13 +231,6 @@ load test_helper
   [ ! -f "$WORK/Library/LaunchAgents/dev.modernmavericks.op-watch.plist" ] || return 1
 }
 
-@test "setup resolves the container build dir when op is run via a relative path (./bin/op)" {
-  # pwd -P (physical) to match gui_root's own `pwd -P`; on a symlinked/automounted
-  # tree (this repo is on NFS) logical vs physical paths can diverge, which would
-  # make the assertion flake under load. Compare physical to physical.
-  repo="$(cd "${BATS_TEST_DIRNAME}/.." && pwd -P)"
-  echo 1 > "$STUB_DIR/docker.exit.1"   # image absent -> the build path (gui_build_dir) runs
-  run bash -c 'cd "$1" && ./bin/op setup' _ "$repo"
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"build -t mavericks-1password $repo/1password"* ]] || return 1
-}
+# (Retired: "setup resolves the container build dir via ./bin/op" -- op setup no longer builds a
+# container; it delegates to `porthole up`. gui_root's symlink/relative-path resolution is still
+# covered by the gui_recover_watch test above.)

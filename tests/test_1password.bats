@@ -87,3 +87,14 @@ teardown() { rm -rf "$GEN"; }
   # Its own pidfile, so the bridge is torn down independently.
   grep -q 'menu-sock' "$gen" || return 1
 }
+
+@test "container spec fully provisions the ONE shared container: SYS_PTRACE + the op CLI-config volume" {
+  # The whole point of the companion-CLI fix: the GUI and `op` CLI share a single container that
+  # carries what BOTH need. PTRACE=yes must reach docker run as a --cap-add (via CAPS), and the op
+  # CLI-config volume must be declared -- both resolved into the spec Porthole's `up` reads.
+  spec="$GEN/1password.container"
+  [ -f "$spec" ] || { echo "no spec at $spec"; return 1; }
+  grep -q "CONTAINER='1password-gui'" "$spec" || return 1
+  grep -q "CAPS='SYS_PTRACE'" "$spec" || return 1
+  grep -q "EXTRA_VOLUMES='1password-cli-config:/root/.config/op'" "$spec" || return 1
+}

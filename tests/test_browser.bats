@@ -4,11 +4,11 @@
 load test_helper
 
 @test "browser_bridge_cmd runs the helper under container socat, pointed at the viewed instance (sourced unit)" {
-  run bash -c 'OP_LIB=1 source "$0"; browser_bridge_cmd' "$OP"
+  run bash -c 'OP_LIB=1 source "$0"; CONTAINER=1password-gui; browser_bridge_cmd' "$OP"
   [ "$status" -eq 0 ] || return 1
   # HOME/XDG_RUNTIME_DIR must match the Porthole/xpra instance the user unlocks, so
   # the extension reaches the unlocked app rather than the old VNC instance.
-  [[ "$output" == *"docker exec -i -u 1000:0 -e HOME=/home/onepassword -e XDG_RUNTIME_DIR=/run/user/1000 op-gui socat STDIO EXEC:/opt/1Password/1Password-BrowserSupport"* ]] || return 1
+  [[ "$output" == *"docker exec -i -u 1000:0 -e HOME=/home/onepassword -e XDG_RUNTIME_DIR=/run/user/1000 1password-gui socat STDIO EXEC:/opt/1Password/1Password-BrowserSupport"* ]] || return 1
 }
 
 @test "browser_manifest_json is a stdio manifest for the 1Password extension (sourced unit)" {

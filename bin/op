@@ -6,13 +6,12 @@ set -u
 ONEP_CONFIG_DIR="${ONEP_CONFIG_DIR:-$HOME/.config/1p}"
 SESSION_FILE="$ONEP_CONFIG_DIR/session"
 DOCKER_ENV_FILE="$ONEP_CONFIG_DIR/docker-env"
-CONTAINER="${ONEP_CONTAINER:-op-gui}"
-VOLUME="${ONEP_VOLUME:-op-config}"
-GUI_VOLUME="${ONEP_GUI_VOLUME:-op-gui-data}"
-IMAGE="${ONEP_IMAGE:-mavericks-1password}"
-# The container hostname 1Password reports as the "device" name when a new app or
-# browser requests vault access. Without this it's an inscrutable Docker hash.
-GUI_HOSTNAME="${ONEP_GUI_HOSTNAME:-mavericks-1password}"
+# op no longer owns or builds a container. Porthole builds, runs, and NAMES the single
+# 1Password container (the very one the GUI viewer uses), resolved from its spec inside the
+# materialized app. $CONTAINER is filled in lazily by load_docker_env (resolve_container);
+# ONEP_CONTAINER overrides for tests/dev. The old op-gui/op-config/op-gui-data identity and
+# self-build (op setup used to `docker build`/`run` its own) are gone -- see cmd_setup.
+CONTAINER="${ONEP_CONTAINER:-}"
 MACHINE="${ONEP_MACHINE:-default}"
 # Container Tools for Mavericks manages the docker CLI through a 'mavericks' docker context that it
 # keeps pointed at the VM across restarts and DHCP renumbers. Prefer it (see load_docker_env) so op
@@ -138,6 +137,28 @@ gui_recover_watch() { printf '%s' "${ONEP_RECOVER_WATCH:-/Applications/Porthole.
 # (was a per-product build under build-native/). ONEP_PORTHOLE_APP overrides.
 gui_porthole_app() { printf '%s' "${ONEP_PORTHOLE_APP:-/Applications/Porthole.app}"; }
 
+# The installed Porthole engine CLI -- the single owner of the container's lifecycle (op setup
+# calls `porthole up`). ONEP_PORTHOLE_BIN overrides; falls back to the sibling checkout for dev.
+porthole_bin() {
+  _p="${ONEP_PORTHOLE_BIN:-/Applications/Porthole.app/Contents/Resources/engine/bin/porthole}"
+  [ -x "$_p" ] || _p="$(porthole_dir)/bin/porthole"
+  printf '%s' "$_p"
+}
+
+# Porthole's resolved container spec inside the materialized app -- the single source of truth for
+# the container's identity and how to bring it up. ONEP_CONTAINER_SPEC overrides (tests).
+container_spec() { printf '%s' "${ONEP_CONTAINER_SPEC:-$(gui_app)/Contents/Resources/1password.container}"; }
+
+# Fill in $CONTAINER from Porthole's spec (unless already set via ONEP_CONTAINER). Called by
+# load_docker_env, so every container-touching command gets the right name without op owning it.
+resolve_container() {
+  [ -n "$CONTAINER" ] && return 0
+  _spec=$(container_spec)
+  [ -f "$_spec" ] || die "1Password container spec not found ($_spec) -- run: op setup (or reinstall the 1Password app)"
+  CONTAINER=$( . "$_spec"; printf '%s' "$CONTAINER" )
+  [ -n "$CONTAINER" ] || die "container spec has no CONTAINER: $_spec"
+}
+
 # --- docker environment ------------------------------------------------------
 
 refresh_docker_env() {
@@ -181,6 +202,12 @@ preflight_host() {
 }
 
 load_docker_env() {
+  _load_docker_endpoint
+  # Resolve the container NAME from Porthole's spec (op no longer names/owns the container).
+  resolve_container
+}
+
+_load_docker_endpoint() {
   # Host prerequisites first (Container Tools -> Fusion), before any Docker use.
   preflight_host
   # An explicit DOCKER_HOST or DOCKER_CONTEXT in the environment always wins.
@@ -202,44 +229,9 @@ load_docker_env() {
 # Advisory, non-fatal prompts to `op setup --rebuild`. Rate-limited to once per
 # calendar day per key via a marker file, so `op gui` doesn't nag on every launch.
 
-nudge_once() {   # $1 = key, $2 = message
-  ensure_config_dir
-  _stamp="$ONEP_CONFIG_DIR/nudged-$1"
-  _today=$(date '+%Y-%m-%d')
-  [ "$(cat "$_stamp" 2>/dev/null)" = "$_today" ] && return 0
-  printf '%s\n' "$_today" > "$_stamp" 2>/dev/null || true
-  printf 'op: %s\n' "$2" >&2
-}
-
-# Nudge when the container image is older than ONEP_STALE_DAYS (default 30). Age is
-# read from the image's created time; a parse failure is silent (never breaks gui).
-check_container_staleness() {
-  _days=${ONEP_STALE_DAYS:-30}
-  _created=$(docker image inspect -f '{{.Created}}' "$IMAGE" 2>/dev/null) || return 0
-  [ -n "$_created" ] || return 0
-  _created=${_created%%.*}        # drop fractional seconds (.000Z); a fraction takes the Z with it
-  _created=${_created%Z}          # no fraction -> the bare trailing Z is still here; drop it
-  _cepoch=$(date -ju -f '%Y-%m-%dT%H:%M:%S' "$_created" '+%s' 2>/dev/null) || return 0
-  _now=$(date -u '+%s')
-  _age=$(( (_now - _cepoch) / 86400 ))
-  [ "$_age" -gt "$_days" ] || return 0
-  nudge_once staleness "your $IMAGE container is ${_age} days old; rebuild to pick up updates: op setup --rebuild"
-}
-
-# Nudge when the container's running xpra differs (major.minor) from what the bundled
-# viewer expects. Unreadable version is silent (never breaks gui).
-check_xpra_compat() {
-  _raw=$(docker exec "$CONTAINER" xpra --version 2>/dev/null) || return 0
-  # e.g. "xpra v6.5.2-r0" -> "6.5.2-r0" -> major.minor "6.5"
-  _ver=${_raw##* }            # last field: "v6.5.2-r0" or "6.5.2-r0"
-  _ver=${_ver#v}
-  case $_ver in
-    [0-9]*.[0-9]*) ;; *) return 0 ;;   # unrecognized -> silent
-  esac
-  _mm=$(printf '%s' "$_ver" | cut -d. -f1,2)
-  [ "$_mm" = "$PORTHOLE_XPRA_VERSION" ] && return 0
-  nudge_once xpra-compat "this container's xpra ($_mm) differs from what the viewer expects ($PORTHOLE_XPRA_VERSION); a rebuild is recommended: op setup --rebuild"
-}
+# Container/image staleness + xpra-version nudges used to live here, fired by `op gui`. They now
+# belong to Porthole's launcher (the single owner of the container's lifecycle), so op no longer
+# duplicates them -- it just opens the app, which nudges if a rebuild is due.
 
 # --- session -------------------------------------------------------------------
 
@@ -591,18 +583,12 @@ cmd_gui() {
     printf 'GUI stopped; CLI commands will fail until: op setup (or op gui)\n'
     return 0
   fi
-  if ! docker container inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true; then
-    docker start "$CONTAINER" >/dev/null 2>&1 \
-      || die "container '$CONTAINER' is not set up; run: op setup"
-  fi
-  check_container_staleness
-  check_xpra_compat
-
   # Open the materialized "Linux 1Password.app" -- a DISTINCT app (its own icon, name, and
-  # LaunchServices instance) that brings up its OWN xpra tunnel, viewer, and recovery watcher. So
-  # `op gui` and the double-clicked app agree, and 1Password's viewer runs alongside other viewers
-  # (Signal, ...) as itself, instead of reactivating one shared Porthole. op no longer drives the
-  # viewer directly -- the app owns that; op just ensures the container is up and opens the app.
+  # LaunchServices instance) whose launcher brings the SHARED container up via `porthole up`
+  # (building it on first run), stands up the xpra tunnel + viewer, and nudges about staleness/xpra
+  # if a rebuild is due. So `op gui` and the double-clicked app agree, and 1Password's viewer runs
+  # alongside other viewers (Signal, ...) as itself. op no longer starts the container or nudges --
+  # the app/launcher owns all of that now; op just opens it (and polls lock state for the glyph).
   _app="$(gui_app)"
   [ -d "$_app" ] || die "$_app not found -- reinstall the 1Password preset (its postinstall materializes it)"
   open "$_app" || die "could not open $_app"
@@ -632,41 +618,17 @@ cmd_setup() {
   _rebuild=0
   [ "${1:-}" = "--rebuild" ] && _rebuild=1
   load_docker_env
-  if [ "$_rebuild" -eq 1 ]; then
-    docker build --no-cache --pull -t "$IMAGE" "$(gui_build_dir)" \
-      || die "image build failed"
-    docker rm -f "$CONTAINER" >/dev/null 2>&1
-  elif ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "Building $IMAGE (downloads 1Password into the VM; takes a few minutes)..."
-    docker build -t "$IMAGE" "$(gui_build_dir)" || die "image build failed"
-  fi
-  docker volume create "$VOLUME" >/dev/null \
-    || die "cannot create Docker volume; is the VM up? Try: docker-machine start $MACHINE"
-  docker volume create "$GUI_VOLUME" >/dev/null \
-    || die "cannot create Docker volume '$GUI_VOLUME'"
-  if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
-    docker start "$CONTAINER" >/dev/null \
-      || die "cannot start existing container '$CONTAINER'"
-  else
-    # --cap-add SYS_PTRACE lets the app read the non-dumpable browser-support
-    # helper's /proc to authenticate it (the browser-integration peer check);
-    # scoped to this single-purpose container.
-    docker run -d --name "$CONTAINER" --hostname "$GUI_HOSTNAME" \
-      --restart unless-stopped --init \
-      --shm-size 512m --security-opt seccomp=unconfined --cap-add SYS_PTRACE \
-      -e "GEOMETRY=${ONEP_GUI_GEOMETRY:-1440x900x24}" \
-      -v "$VOLUME:/root/.config/op" \
-      -v "$GUI_VOLUME:/home/onepassword/.config/1Password" \
-      "$IMAGE" >/dev/null \
-      || die "cannot create container '$CONTAINER'"
-  fi
+  # Porthole is the SINGLE creator of the 1Password container: it builds the image on the Mac from
+  # AgileBits' apt repo and runs it with the op CLI-config volume + SYS_PTRACE (all declared in the
+  # app's container spec, the same one the GUI viewer uses). Bring it up headlessly here so the CLI
+  # and GUI share one container; --rebuild forces a fresh image.
+  _up=""; [ "$_rebuild" -eq 1 ] && _up="--rebuild"
+  # shellcheck disable=SC2086  # $_up is intentionally unquoted (empty -> no argument)
+  "$(porthole_bin)" up $_up "$(container_spec)" \
+    || die "container bring-up failed -- is Porthole installed and the 1Password app materialized? (reinstall the 1Password preset)"
   # named volumes are born root:root 755; op refuses config dirs looser than 700
   docker exec -i "$CONTAINER" chmod 700 /root/.config/op \
     || die "cannot tighten permissions on the op config volume"
-  if [ "$CONTAINER" != "op-cli" ] && docker container inspect op-cli >/dev/null 2>&1; then
-    docker rm -f op-cli >/dev/null \
-      && echo "Retired the old op-cli container (volumes preserved)."
-  fi
   _accounts=$(docker exec -i "$CONTAINER" op account list --format json)
   case $_accounts in
     ''|'[]')

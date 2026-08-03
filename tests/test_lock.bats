@@ -6,7 +6,7 @@ load test_helper
 
 @test "lock_state_write_once: Lock Screen present -> writes 'locked'" {
   OP_LIB=1 . "$OP"
-  CONTAINER=op-gui
+  CONTAINER=1password-gui
   LOCK_STATE_FILE="$WORK/lockstate"
   # default docker stub exits 0 -> xdotool search "finds" the Lock Screen -> locked
   run lock_state_write_once
@@ -16,7 +16,7 @@ load test_helper
 
 @test "lock_state_write_once: no Lock Screen -> writes 'unlocked'" {
   OP_LIB=1 . "$OP"
-  CONTAINER=op-gui
+  CONTAINER=1password-gui
   LOCK_STATE_FILE="$WORK/lockstate"
   echo 1 > "$STUB_DIR/docker.exit"   # docker exec (xdotool search) non-zero -> not found
   run lock_state_write_once
@@ -25,7 +25,7 @@ load test_helper
 
 @test "lock_state_write_once writes atomically (no leftover .tmp)" {
   OP_LIB=1 . "$OP"
-  CONTAINER=op-gui
+  CONTAINER=1password-gui
   LOCK_STATE_FILE="$WORK/lockstate"
   run lock_state_write_once
   [ -f "$WORK/lockstate" ] || return 1
