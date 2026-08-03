@@ -18,6 +18,9 @@ setup() {
   # in (unset this + point ONEP_RECOVER_WATCH at the fast stub).
   export ONEP_NO_RECOVER=1
   export ONEP_NO_LOCK_POLL=1     # don't spawn the infinite lock-state poll loop in tests
+  # op gui now delegates to the materialized "Linux 1Password.app"; point it at a temp bundle that
+  # exists so cmd_gui proceeds (the real one is dropped by the preset's postinstall + materialize).
+  export ONEP_GUI_APP="$WORK/Linux 1Password.app"; mkdir -p "$ONEP_GUI_APP"
   export PATH="${BATS_TEST_DIRNAME}/stubs:$PATH"
   mkdir -p "$STUB_DIR"
   : > "$STUB_LOG"

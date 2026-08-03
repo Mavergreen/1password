@@ -583,16 +583,12 @@ lock_poll_stop() {
 cmd_gui() {
   load_docker_env
   if [ "${1:-}" = "stop" ]; then
-    # Kill the auto-recovery watcher FIRST, else stopping the container disconnects the
-    # viewer -> marker -> the watcher fights us by relaunching.
-    if [ -f "$XPRA_WATCH_PID" ]; then
-      kill "$(cat "$XPRA_WATCH_PID")" 2>/dev/null
-      rm -f "$XPRA_WATCH_PID"
-    fi
     lock_poll_stop
+    # Quit the materialized viewer cleanly (on an intentional Quit its OWN recovery watcher stays
+    # down, so it won't fight us), then stop the resident container.
+    osascript -e "tell application \"$(basename "$(gui_app)" .app)\" to quit" >/dev/null 2>&1 || true
     docker stop "$CONTAINER" >/dev/null || die "cannot stop container '$CONTAINER'"
-    xpra_tunnel_stop
-    printf 'GUI container stopped; CLI commands will fail until: op setup (or op gui)\n'
+    printf 'GUI stopped; CLI commands will fail until: op setup (or op gui)\n'
     return 0
   fi
   if ! docker container inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true; then
@@ -602,29 +598,17 @@ cmd_gui() {
   check_container_staleness
   check_xpra_compat
 
-  # Porthole (native Cocoa Xpra viewer). Starts the xpra backend on demand,
-  # tunnels to it, and launches the app pointed at the tunnel. No VNC.
-  xpra_backend_start
-  xpra_tunnel_start
-  # No -n: Porthole is a single-instance menu-bar app (it stays resident for its
-  # tray icon after you close the window). `open` without -n activates the
-  # running instance -- which re-shows the main window via applicationShould-
-  # HandleReopen -- instead of stacking a second process (and a second icon).
-  open "$(gui_porthole_app)" --args "$XPRA_SOCK" \
-    || die "could not launch Porthole"
-  printf '1Password GUI: launched Porthole -> %s\n' "$XPRA_SOCK"
-  # Auto-recovery watcher: relaunch the viewer if the backend drops (VM reboot / rebuild).
-  # 1Password's container is resident, so no on-demand stop -- recovery only. Guarded so a
-  # second `op gui` (or the watcher's own relaunch) doesn't stack watchers.
-  _recover_watch="$(gui_recover_watch)"
-  if [ -x "$_recover_watch" ] && [ -z "${ONEP_NO_RECOVER:-}" ] \
-     && ! { [ -f "$XPRA_WATCH_PID" ] && ps -p "$(cat "$XPRA_WATCH_PID")" >/dev/null 2>&1; }; then
-    RW_BIN="$(gui_porthole_app)/Contents/MacOS/Porthole" \
-    RW_MARKER="${XPRA_SOCK%-xpra.sock}-viewer-lost" \
-    RW_RELAUNCH="'$0' gui" RW_PIDFILE="$XPRA_WATCH_PID" \
-    nohup "$_recover_watch" </dev/null >/dev/null 2>&1 3>&- &
-  fi
-  # Publish 1Password's lock state so the viewer can badge its menu-bar glyph.
+  # Open the materialized "Linux 1Password.app" -- a DISTINCT app (its own icon, name, and
+  # LaunchServices instance) that brings up its OWN xpra tunnel, viewer, and recovery watcher. So
+  # `op gui` and the double-clicked app agree, and 1Password's viewer runs alongside other viewers
+  # (Signal, ...) as itself, instead of reactivating one shared Porthole. op no longer drives the
+  # viewer directly -- the app owns that; op just ensures the container is up and opens the app.
+  _app="$(gui_app)"
+  [ -d "$_app" ] || die "$_app not found -- reinstall the 1Password preset (its postinstall materializes it)"
+  open "$_app" || die "could not open $_app"
+  printf '1Password GUI: opened %s\n' "$_app"
+  # Publish 1Password's lock state (shared $TMPDIR/1password-lockstate, derived from the same sock
+  # path the materialized viewer uses -- SLUG=1password) so the viewer badges its menu-bar glyph.
   if [ -z "${ONEP_NO_LOCK_POLL:-}" ]; then lock_poll_start; fi
 }
 

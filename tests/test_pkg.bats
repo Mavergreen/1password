@@ -47,5 +47,7 @@ teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
   [ -d "$WORK/apps/Linux 1Password.app" ]
   [ -f "$WORK/apps/Linux 1Password.app/Contents/Resources/menu.json" ]
   [ -x "$WORK/apps/Linux 1Password.app/Contents/Resources/bin/1password" ]
-  grep -q 'Applications/Porthole.app' "$WORK/apps/Linux 1Password.app/Contents/Resources/bin/1password"
+  [ -x "$WORK/apps/Linux 1Password.app/Contents/Resources/bin/porthole-recover-watch" ]   # bundled watcher
+  # runs its OWN engine binary in place (distinct app), not `open` of a shared Porthole.app
+  grep -q 'exec "$_bin" "$XPRA_SOCK"' "$WORK/apps/Linux 1Password.app/Contents/Resources/bin/1password"
 }

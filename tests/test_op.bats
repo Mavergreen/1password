@@ -74,37 +74,23 @@ load test_helper
   [[ "$log" == *"start op-gui"* ]] || return 1
 }
 
-@test "op gui stop stops the container and tears down the tunnel" {
-  mkdir -p "$WORK/config"
-  echo 4242 > "$WORK/config/xpra-tunnel.pid"
+@test "op gui stop quits the viewer app and stops the container" {
   run "$OP" gui stop
-  [ "$status" -eq 0 ] || return 1
-  [[ "$(cat "$STUB_LOG")" == *"stop op-gui"* ]] || return 1
-  [ ! -f "$WORK/config/xpra-tunnel.pid" ] || return 1
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$(cat "$STUB_LOG")" == *"stop op-gui"* ]] || { cat "$STUB_LOG"; return 1; }   # container stopped
 }
 
-@test "op gui launches Porthole pointed at the xpra tunnel" {
+@test "op gui opens the materialized Linux 1Password.app (a distinct app that owns the viewer)" {
   echo 'true' > "$STUB_DIR/docker.stdout.1"   # container running probe
   run "$OP" gui
-  [ "$status" -eq 0 ] || return 1
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"socat UNIX-LISTEN:"*"1password-xpra.sock,fork,reuseaddr"* ]] || return 1
-  [[ "$log" == *"open"*"--args"*"1password-xpra.sock"* ]] || return 1
-  [[ "$output" == *"launched Porthole -> "*"1password-xpra.sock"* ]] || return 1
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$(cat "$STUB_LOG")" == *"open"*"Linux 1Password.app"* ]] || { cat "$STUB_LOG"; return 1; }
+  [[ "$output" == *"opened "*"Linux 1Password.app"* ]] || return 1
 }
 
-@test "op gui spawns the auto-recovery watcher" {
-  echo 'true' > "$STUB_DIR/docker.stdout.1"
-  # Opt back into watcher-spawning (the helper disables it by default), but via the
-  # fast stub -- which exits immediately, so it can't hang bats like the real daemon.
-  unset ONEP_NO_RECOVER
-  export ONEP_RECOVER_WATCH="${BATS_TEST_DIRNAME}/stubs/porthole-recover-watch"
-  run "$OP" gui
-  [ "$status" -eq 0 ] || return 1
-  # The watcher is spawned with `nohup … &`, so wait for its log line rather than racing it.
-  for _ in $(seq 1 40); do grep -q 'porthole-recover-watch' "$STUB_LOG" && break; sleep 0.1; done
-  grep -q 'porthole-recover-watch' "$STUB_LOG" || { cat "$STUB_LOG"; return 1; }
-}
+# op gui no longer runs the viewer OR its recovery watcher itself: the materialized "Linux
+# 1Password.app" owns the xpra tunnel, viewer, and recovery (exercised by Porthole's launcher tests).
+# The former "op gui spawns the watcher" / "gui stop kills the watcher" tests are retired accordingly.
 
 @test "gui_recover_watch points at the installed Porthole engine (ONEP_RECOVER_WATCH overrides)" {
   # The watcher ships inside the installed Porthole engine now (was resolved $0-relative to a sibling
@@ -114,14 +100,6 @@ load test_helper
   [ "$output" = "/Applications/Porthole.app/Contents/Resources/engine/bin/porthole-recover-watch" ] || { echo "$output"; return 1; }
   run env ONEP_RECOVER_WATCH=/tmp/rw bash -c 'OP_LIB=1 source "$0"; gui_recover_watch' "$OP"
   [ "$output" = "/tmp/rw" ] || { echo "$output"; return 1; }
-}
-
-@test "op gui stop kills the watcher before stopping the container" {
-  mkdir -p "$WORK/config"
-  echo 4243 > "$WORK/config/xpra-watch.pid"
-  run "$OP" gui stop
-  [ "$status" -eq 0 ] || return 1
-  [ ! -f "$WORK/config/xpra-watch.pid" ] || return 1
 }
 
 @test "xpra_tunnel_running rejects a live pid whose socket is gone (self-heal)" {
