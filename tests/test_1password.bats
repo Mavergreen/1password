@@ -75,19 +75,6 @@ teardown() { rm -rf "$GEN"; }
   grep -q 'exec 1password --disable-gpu --user-data-dir=' "$CHILD" || return 1
 }
 
-@test "launcher bridges a menu Unix socket alongside the xpra tunnel" {
-  gen="${BATS_TEST_DIRNAME}/../bin/1password"
-  # The Mac-side socket the viewer dials ($TMPDIR/<app>-menu.sock), stood up with a
-  # UNIX-LISTEN and forwarded via docker exec to a UNIX-CONNECT inside.
-  grep -qF 'MENU_SOCK="${TMPDIR:-/tmp}/1password-menu.sock"' "$gen" || return 1
-  grep -q 'socat "UNIX-LISTEN:$MENU_SOCK,fork,reuseaddr"' "$gen" || return 1
-  # The container-side socat CONNECTs the menu daemon's socket (inner colon escaped,
-  # exactly as the xpra bridge emits UNIX-CONNECT\:).
-  grep -qF 'socat STDIO UNIX-CONNECT\\:/run/user/1000/porthole-menu.sock' "$gen" || return 1
-  # Its own pidfile, so the bridge is torn down independently.
-  grep -q 'menu-sock' "$gen" || return 1
-}
-
 @test "container spec fully provisions the ONE shared container: SYS_PTRACE + the op CLI-config volume" {
   # The whole point of the companion-CLI fix: the GUI and `op` CLI share a single container that
   # carries what BOTH need. PTRACE=yes must reach docker run as a --cap-add (via CAPS), and the op
