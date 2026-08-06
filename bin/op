@@ -42,13 +42,10 @@ LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
 WATCH_LAUNCHD_LABEL="dev.modernmavericks.op-watch"
 WATCH_LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$WATCH_LAUNCHD_LABEL.plist"
 WATCH_INTERVAL="${ONEP_WATCH_INTERVAL:-3}"
-# Porthole / xpra backend: local Unix-socket bridge to the container's xpra socket.
+# The Porthole xpra socket path, retained only to DERIVE the lock-state channel path below (the
+# materialized viewer computes the same path). op no longer bridges xpra itself -- the materialized
+# "Linux 1Password.app" launcher owns the xpra tunnel, viewer, and recovery.
 XPRA_SOCK="${ONEP_XPRA_SOCK:-${TMPDIR:-/tmp}/1password-xpra.sock}"
-XPRA_TUNNEL_PID="$ONEP_CONFIG_DIR/xpra-tunnel.pid"
-# Auto-recovery watcher: relaunches the viewer if the backend drops (VM reboot / rebuild).
-# The watcher script path is resolved at use (gui_recover_watch) via the same symlink-aware
-# root as the app -- $0 here may be the /usr/local/bin or ~/bin symlink, not the real bin/.
-XPRA_WATCH_PID="$ONEP_CONFIG_DIR/xpra-watch.pid"
 # Lock-state channel: a background poller publishes "locked"/"unlocked" here (derived from
 # the xpra sock, so the Porthole viewer computes the same path) and the viewer polls it to
 # badge its menu-bar glyph with a padlock when locked.
@@ -143,6 +140,17 @@ porthole_bin() {
   _p="${ONEP_PORTHOLE_BIN:-/Applications/Porthole.app/Contents/Resources/engine/bin/porthole}"
   [ -x "$_p" ] || _p="$(porthole_dir)/bin/porthole"
   printf '%s' "$_p"
+}
+
+# s6-ipcserver -- Porthole's viewer transport (a UCSPI-unix superserver), shipped in the engine beside
+# the porthole CLI. op reuses it for the ssh-agent bridge. Prefer the engine copy, fall back to PATH
+# (dev). ONEP_S6_IPCSERVER overrides (tests). Callers prepend its dir to PATH so its chain-loaded
+# components (s6-ipcserver-socketbinder, s6-ipcserverd) resolve.
+s6_ipcserver_bin() {
+  if [ -n "${ONEP_S6_IPCSERVER:-}" ]; then printf '%s' "$ONEP_S6_IPCSERVER"; return; fi
+  _p=$(porthole_bin); _b="${_p%/porthole}/s6-ipcserver"
+  [ -x "$_b" ] || _b="$(command -v s6-ipcserver 2>/dev/null || true)"
+  printf '%s' "$_b"
 }
 
 # Porthole's resolved container spec inside the materialized app -- the single source of truth for
@@ -493,59 +501,6 @@ cmd_clip() {
 
 _vm_ip() { _ip=${DOCKER_HOST#tcp://}; printf '%s' "${_ip%%:*}"; }
 
-# Porthole backend: a local bridge to the container's xpra Unix socket, and on-demand
-# startup of the xpra session (:100) that runs 1Password. Same socat-over-exec bridge as
-# the ssh-agent tunnel, Unix on both ends, no published port.
-xpra_tunnel_bridge_cmd() {
-  printf 'docker exec -i %s socat STDIO UNIX-CONNECT:/run/user/1000/porthole-xpra.sock' "$CONTAINER"
-}
-xpra_tunnel_running() {
-  [ -f "$XPRA_TUNNEL_PID" ] || return 1
-  ps -p "$(cat "$XPRA_TUNNEL_PID")" >/dev/null 2>&1 || return 1
-  # The pid can outlive a usable tunnel: a racing `op gui` may have rm'd the socket
-  # (xpra_tunnel_start does `rm -f "$XPRA_SOCK"`), or socat can wedge -- leaving a live
-  # socat listening on a socket that no longer exists, so the viewer can't connect (it
-  # then sits windowless, or now self-terminates). So also require the socket file to be
-  # present; if it's gone the tunnel is broken and must be rebuilt.
-  [ -S "$XPRA_SOCK" ]
-}
-xpra_tunnel_start() {
-  command -v socat >/dev/null 2>&1 \
-    || die "socat not found on the Mac; install it (e.g. pkgin install socat)"
-  xpra_tunnel_running && return 0
-  # Not usable (dead, or a live pid whose socket got clobbered) -> tear down any stale
-  # socat before rebuilding, so we neither leak a listener nor reuse a broken one.
-  xpra_tunnel_stop
-  ensure_config_dir
-  rm -f "$XPRA_SOCK"
-  _exec="EXEC:$(xpra_tunnel_bridge_cmd | sed 's/:/\\:/g')"
-  socat "UNIX-LISTEN:$XPRA_SOCK,fork,reuseaddr" "$_exec" &
-  echo $! > "$XPRA_TUNNEL_PID"
-}
-xpra_tunnel_stop() {
-  if [ -f "$XPRA_TUNNEL_PID" ]; then
-    kill "$(cat "$XPRA_TUNNEL_PID")" 2>/dev/null
-    rm -f "$XPRA_TUNNEL_PID"
-  fi
-}
-xpra_backend_running() {
-  # "Running" = actually ACCEPTING CONNECTIONS on the xpra Unix socket, not merely that
-  # the process exists: a cold container binds the socket a beat after xpra appears, and
-  # opening the viewer in that gap yields "connection refused" / no window (and can leave
-  # 1Password's focus handshake stuck). python3 is always in the container.
-  docker exec "$CONTAINER" \
-    python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(1); sys.exit(s.connect_ex("/run/user/1000/porthole-xpra.sock"))' 2>/dev/null
-}
-xpra_backend_start() {
-  # The container entrypoint (start-1password-gui.sh) IS the xpra :100 backend, so we
-  # don't launch it here -- just wait for it to be serving on its socket (the container
-  # may have only just been (re)started). ~30s covers xpra + Xvfb + 1Password startup.
-  _i=0
-  while [ "$_i" -lt 150 ] && ! xpra_backend_running; do sleep 0.2; _i=$((_i + 1)); done
-  xpra_backend_running \
-    || die "the xpra backend (:100) never accepted connections in '$CONTAINER'; check: docker logs $CONTAINER"
-}
-
 # --- lock-state poller -------------------------------------------------------
 # Publish 1Password's lock state to LOCK_STATE_FILE for the Porthole viewer's menu-bar
 # glyph. 1Password shows a "Lock Screen" window iff locked (op's own unlock check). Write
@@ -647,10 +602,6 @@ cmd_setup() {
 
 # --- ssh agent ---------------------------------------------------------------
 
-socat_bridge_cmd() {
-  printf 'docker exec -i %s socat STDIO UNIX-CONNECT:%s' "$CONTAINER" "$SSH_REMOTE_SOCK"
-}
-
 ssh_agent_running() {
   [ -f "$SSH_AGENT_PID" ] || return 1
   # ps -p is portable and (unlike the kill builtin) stubbable in tests;
@@ -666,8 +617,9 @@ ssh_agent_remote_socket_present() {
 ssh_agent_start() {
   _foreground=0
   [ "${1:-}" = "--foreground" ] && _foreground=1
-  command -v socat >/dev/null 2>&1 \
-    || die "socat not found on the Mac; install it (e.g. pkgin install socat)"
+  _ipc=$(s6_ipcserver_bin)
+  { [ -n "$_ipc" ] && [ -x "$_ipc" ]; } \
+    || die "the Porthole transport (s6-ipcserver) is missing -- reinstall Porthole"
   if ssh_agent_running; then
     printf 'op ssh-agent already running (%s).\n' "$SSH_AGENT_SOCK"
     printf 'export SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
@@ -678,13 +630,18 @@ ssh_agent_start() {
   ensure_config_dir
   rm -f "$SSH_AGENT_SOCK"
   mkdir -p "$(dirname "$SSH_AGENT_SOCK")"
-  # socat treats ':' as an address-parameter separator, so the inner
-  # UNIX-CONNECT: colon must be escaped in the EXEC address
-  _exec="EXEC:$(socat_bridge_cmd | sed 's/:/\\:/g')"
+  _ipcdir=$(dirname "$_ipc")
+  # s6-ipcserver binds $SSH_AGENT_SOCK owner-only (-a 0600, preserving the old socat mode=600), forks
+  # per connection, and runs the child with the connection on stdin/stdout; docker exec pipes it to
+  # the container's socat, which connects the app's SSH agent socket. Its dir goes on PATH so the
+  # chain-loaded components (s6-ipcserver-socketbinder, s6-ipcserverd) resolve.
   if [ "$_foreground" -eq 1 ]; then
-    exec socat "UNIX-LISTEN:$SSH_AGENT_SOCK,fork,mode=600" "$_exec"
+    PATH="$_ipcdir:$PATH"; export PATH
+    exec "$_ipc" -a 0600 "$SSH_AGENT_SOCK" \
+      docker exec -i "$CONTAINER" socat STDIO UNIX-CONNECT:"$SSH_REMOTE_SOCK"
   fi
-  socat "UNIX-LISTEN:$SSH_AGENT_SOCK,fork,mode=600" "$_exec" &
+  PATH="$_ipcdir:$PATH" "$_ipc" -a 0600 "$SSH_AGENT_SOCK" \
+    docker exec -i "$CONTAINER" socat STDIO UNIX-CONNECT:"$SSH_REMOTE_SOCK" &
   echo $! > "$SSH_AGENT_PID"
   printf 'op ssh-agent started.\nexport SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
 }

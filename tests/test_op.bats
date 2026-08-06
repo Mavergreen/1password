@@ -70,17 +70,6 @@ load test_helper
   [ "$output" = "/tmp/rw" ] || { echo "$output"; return 1; }
 }
 
-@test "xpra_tunnel_running rejects a live pid whose socket is gone (self-heal)" {
-  mkdir -p "$WORK/config"
-  echo 4242 > "$WORK/config/xpra-tunnel.pid"
-  : > "$STUB_DIR/socat.alive"                  # stub `ps` reports the recorded pid alive...
-  # ...but the socket it should be serving does not exist -> the tunnel is NOT usable.
-  # The old check trusted the pid alone and reused a dead tunnel (viewer couldn't connect).
-  run env ONEP_XPRA_SOCK="$WORK/nope.sock" bash -c 'OP_LIB=1 source "$0"; xpra_tunnel_running && echo RUNNING || echo NOT_RUNNING' "$OP"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *"NOT_RUNNING"* ]] || return 1
-}
-
 @test "_vm_ip extracts the host from DOCKER_HOST (sourced unit)" {
   run bash -c 'DOCKER_HOST=tcp://192.0.2.1:2376 OP_LIB=1 source "$0"; _vm_ip' "$OP"
   [ "$status" -eq 0 ] || return 1

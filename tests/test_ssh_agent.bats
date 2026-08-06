@@ -3,31 +3,28 @@
 
 load test_helper
 
-@test "socat_bridge_cmd targets the app agent socket (sourced unit)" {
-  run bash -c 'OP_LIB=1 source "$0"; CONTAINER=1password-gui; socat_bridge_cmd' "$OP"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *"docker exec -i 1password-gui socat STDIO UNIX-CONNECT:/home/onepassword/.1password/agent.sock"* ]] || return 1
-}
-
-@test "ssh-agent start launches the socat listener (escaped colon)" {
+@test "ssh-agent start launches the s6-ipcserver listener owner-only (-a 0600)" {
   echo 'true' > "$STUB_DIR/docker.stdout"
   run "$OP" ssh-agent start
   [ "$status" -eq 0 ] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"socat UNIX-LISTEN:"* ]] || return 1
-  [[ "$log" == *'EXEC:docker exec -i 1password-gui socat STDIO UNIX-CONNECT\:/home/onepassword/.1password/agent.sock'* ]] || return 1
+  # Mac-side transport is s6-ipcserver, owner-only; no socat UNIX-LISTEN / escaped-colon hack.
+  [[ "$log" == *"s6-ipcserver -a 0600 "* ]] || return 1
+  # It runs the container-side socat bridge as plain argv (the container's own socat, no backslash).
+  [[ "$log" == *"docker exec -i 1password-gui socat STDIO UNIX-CONNECT:/home/onepassword/.1password/agent.sock"* ]] || return 1
+  [[ "$log" != *"UNIX-LISTEN"* ]] || return 1
   [[ "$output" == *"export SSH_AUTH_SOCK="* ]] || return 1
 }
 
 @test "ssh-agent start is idempotent" {
   echo 'true' > "$STUB_DIR/docker.stdout"
-  touch "$STUB_DIR/socat.alive"
+  touch "$STUB_DIR/agent.alive"
   mkdir -p "$ONEP_CONFIG_DIR"
   echo 4242 > "$ONEP_CONFIG_DIR/ssh-agent.pid"
   run "$OP" ssh-agent start
   [ "$status" -eq 0 ] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" != *"socat UNIX-LISTEN:"* ]] || return 1
+  [[ "$log" != *"s6-ipcserver"* ]] || return 1
   [[ "$output" == *"already running"* ]] || return 1
 }
 
@@ -52,7 +49,7 @@ load test_helper
 @test "ssh-agent status running" {
   mkdir -p "$ONEP_CONFIG_DIR"
   echo 4242 > "$ONEP_CONFIG_DIR/ssh-agent.pid"
-  touch "$STUB_DIR/socat.alive"
+  touch "$STUB_DIR/agent.alive"
   run "$OP" ssh-agent status
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *"running"* ]] || return 1
