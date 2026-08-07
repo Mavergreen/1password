@@ -30,20 +30,20 @@ jobs:
           grep -o 'os-version min="[0-9.]*"' /tmp/pkgx/Distribution
 
   # 10.9-safety gate for the native Porthole viewer (bin/op's default GUI client),
-  # built through the shared mavericks-shared-cmake conventions: CI installs it via the
+  # built through the shared mavericks-shipyard conventions: CI installs it via the
   # @v1 action, and find_package + include(Mavericks) run the AppleClang gate while
   # mavericks_assert_binary_compatible(Porthole) fails the build if the cross-built binary imports a
   # post-10.9 symbol. macos-26 is a modern host -> cross mode.
   cmake-10_9-gate:
-    name: CMake 10.9-safety gate (Porthole via mavericks-shared-cmake)
+    name: CMake 10.9-safety gate (Porthole via mavericks-shipyard)
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
 
-      # shared-cmake installs itself via its own action (HTTPS via the runner token). It self-registers
+      # shipyard installs itself via its own action (HTTPS via the runner token). It self-registers
       # in the user package registry, so find_package resolves it downstream with no CMAKE_PREFIX_PATH.
-      - name: Install mavericks-shared-cmake
-        uses: ModernMavericks/shared-cmake/.github/actions/install@v1
+      - name: Install mavericks-shipyard
+        uses: ModernMavericks/shipyard/.github/actions/install@v1
 
       - name: Ensure Rosetta (the x86_64 @ 10.9 codec test runs under it)
         run: softwareupdate --install-rosetta --agree-to-license || true

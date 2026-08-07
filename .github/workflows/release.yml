@@ -40,8 +40,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install mavericks-shared-cmake
-        uses: ModernMavericks/shared-cmake/.github/actions/install@v1
+      - name: Install mavericks-shipyard
+        uses: ModernMavericks/shipyard/.github/actions/install@v1
 
       - name: Decide version + whether this run publishes
         id: ver
@@ -64,7 +64,7 @@ jobs:
           echo "version=$VER publish=$PUB"
 
       - name: Run the repo's tests
-        run: sh "$MSC_SCRIPTS/run-repo-tests.sh"
+        run: sh "$SHIPYARD_SCRIPTS/run-repo-tests.sh"
 
       - name: Build the preset .pkg (conf + menu manifest + op CLI)
         run: |
@@ -90,7 +90,7 @@ jobs:
     if: needs.build.outputs.publish == 'true'
     permissions:
       contents: write
-    uses: ModernMavericks/shared-cmake/.github/workflows/publish-release.yml@v1
+    uses: ModernMavericks/shipyard/.github/workflows/publish-release.yml@v1
     with:
       version: ${{ needs.build.outputs.version }}
       artifact: onepassword

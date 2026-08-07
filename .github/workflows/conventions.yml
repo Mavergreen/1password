@@ -6,4 +6,4 @@ on:
     branches: [main]
 jobs:
   conventions:
-    uses: ModernMavericks/shared-cmake/.github/workflows/family-conventions.yml@v1
+    uses: ModernMavericks/shipyard/.github/workflows/family-conventions.yml@v1

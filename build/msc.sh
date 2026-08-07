@@ -1,6 +1,6 @@
-# build/msc.sh -- sourced: locate the installed mavericks-shared-cmake scripts dir as $MSC.
-MSC="${MSC_SCRIPTS:-}"
-[ -d "$MSC" ] || MSC="$(cat "$HOME/.cmake/packages/MavericksSharedCMake/"* 2>/dev/null | head -1)/scripts"
-[ -d "$MSC" ] || MSC="$(cd "$(dirname "$0")/.." && pwd)/../mavericks-shared-cmake/scripts"
-[ -d "$MSC" ] || { echo "cannot locate mavericks-shared-cmake scripts (install it, or set MSC_SCRIPTS)" >&2; return 1 2>/dev/null || exit 1; }
-export MSC
+# build/msc.sh -- sourced: locate the installed mavericks-shipyard scripts dir as $SHIPYARD.
+SHIPYARD="${SHIPYARD_SCRIPTS:-}"
+[ -d "$SHIPYARD" ] || SHIPYARD="$(cat "$HOME/.cmake/packages/MavericksShipyard/"* 2>/dev/null | head -1)/scripts"
+[ -d "$SHIPYARD" ] || SHIPYARD="$(cd "$(dirname "$0")/.." && pwd)/../mavericks-shipyard/scripts"
+[ -d "$SHIPYARD" ] || { echo "cannot locate mavericks-shipyard scripts (install it, or set SHIPYARD_SCRIPTS)" >&2; return 1 2>/dev/null || exit 1; }
+export SHIPYARD
