@@ -32,7 +32,7 @@ teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
     "$REPO/packaging/macos/scripts/preinstall" > "$WORK/pre"; chmod 755 "$WORK/pre"
   run sh "$WORK/pre"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"needs Porthole installed"* ]]
+  [[ "$output" == *"needs Porthole installed"* ]] || false
 }
 
 @test "postinstall invokes porthole materialize on the installed conf" {
