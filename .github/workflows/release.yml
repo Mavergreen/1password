@@ -86,13 +86,15 @@ jobs:
           sh packaging/macos/build_pkg.sh "${{ steps.ver.outputs.version }}" \
              "dist/mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
 
-      - name: Collect the release-notes body into the artifact
+      # The .pkg's own installer floor (packaging/macos/distribution.xml) is bare 10.9, not the
+      # family's usual 10.9.5 -- --min-os here says what this pkg actually declares, not what most
+      # of the family declares.
+      - name: Generate release notes
         run: |
           set -eu
-          NOTES="$(sh build/release-notes-file.sh "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.version }}" || true)"
-          if [ -n "$NOTES" ] && [ -s "$NOTES" ]; then cp "$NOTES" dist/RELEASE_NOTES.md
-          elif [ -s release-notes/README.md ]; then cp release-notes/README.md dist/RELEASE_NOTES.md
-          else printf '## Linux 1Password %s\n\nAutomated release.\n' "${{ steps.ver.outputs.version }}" > dist/RELEASE_NOTES.md; fi
+          sh "$SHIPYARD_SCRIPTS/release-notes.sh" \
+            --tag "${{ steps.ver.outputs.version }}" --version "${{ steps.ver.outputs.version }}" \
+            --product 'Linux 1Password' --min-os 10.9 --out dist/RELEASE_NOTES.md
 
       - uses: actions/upload-artifact@v7
         with:
