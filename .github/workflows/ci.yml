@@ -40,8 +40,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # shipyard installs itself via its own action (HTTPS via the runner token). It self-registers
-      # in the user package registry, so find_package resolves it downstream with no CMAKE_PREFIX_PATH.
+      # shipyard installs itself via its own action (HTTPS via the runner token). The action puts
+      # shipyard-cmake on PATH and exports SHIPYARD_SCRIPTS; shipyard-cmake is the only cmake that
+      # configures against shipyard, and it supplies the prefix find_package(MavericksShipyard)
+      # resolves from, so there is nothing to register and no CMAKE_PREFIX_PATH to set.
       - name: Install mavericks-shipyard
         uses: ModernMavericks/shipyard/.github/actions/install@v1
 
@@ -53,9 +55,9 @@ jobs:
       # guard runs as a build-time POST_BUILD (static otool check; no Rosetta).
       - name: Configure + build (x86_64 @ 10.9) — compat guard gates Porthole
         run: |
-          cmake --preset cross
-          cmake --build build-cross
+          shipyard-cmake --preset cross
+          shipyard-cmake --build build-cross
           echo "Porthole slice:"; lipo -info build-cross/porthole/viewer/Porthole.app/Contents/MacOS/Porthole
 
       - name: Off-device codec test (Rosetta)
-        run: ctest --preset cross -R '^protocol$' --output-on-failure
+        run: shipyard-ctest --preset cross -R '^protocol$' --output-on-failure
