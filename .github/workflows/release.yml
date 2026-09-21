@@ -60,6 +60,11 @@ jobs:
       - name: Record the pre-build tree
         run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh" --record
 
+      - name: Build out of tree
+        run: |
+          echo "MAVERICKS_BUILD_ROOT=$RUNNER_TEMP/mm-build" >> "$GITHUB_ENV"
+          echo "ONEP_DIST_DIR=$RUNNER_TEMP/mm-build/onep-build/dist" >> "$GITHUB_ENV"
+
       - name: Decide version + whether this run publishes
         id: ver
         run: |
@@ -87,7 +92,7 @@ jobs:
         run: |
           set -eu
           sh packaging/macos/build_pkg.sh "${{ steps.ver.outputs.version }}" \
-             "dist/mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
+             "$ONEP_DIST_DIR/mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
 
       # The .pkg's own installer floor (packaging/macos/distribution.xml) is bare 10.9, not the
       # family's usual 10.9.5 -- --min-os here says what this pkg actually declares, not what most
@@ -97,7 +102,7 @@ jobs:
           set -eu
           sh "$SHIPYARD_SCRIPTS/release-notes.sh" \
             --tag "${{ steps.ver.outputs.version }}" --version "${{ steps.ver.outputs.version }}" \
-            --product 'Linux 1Password' --min-os 10.9 --out dist/RELEASE_NOTES.md
+            --product 'Linux 1Password' --min-os 10.9 --out "$ONEP_DIST_DIR/RELEASE_NOTES.md"
 
       - name: The build must not have written into the source tree
         run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh"
@@ -105,7 +110,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: onepassword
-          path: dist/*
+          path: ${{ env.ONEP_DIST_DIR }}/*
 
   publish:
     needs: build
