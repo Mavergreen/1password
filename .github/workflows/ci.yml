@@ -14,6 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install mavericks-shipyard
+        uses: ModernMavericks/shipyard/.github/actions/install@v1
+
+      - name: Record the pre-build tree
+        run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh" --record
+
       - name: Install bats
         run: brew install bats-core
 
@@ -28,6 +34,9 @@ jobs:
           pkgutil --payload-files "mavericks-1password-$VER.pkg" | grep -E '/usr/local/bin/op$'
           pkgutil --expand "mavericks-1password-$VER.pkg" /tmp/pkgx
           grep -o 'os-version min="[0-9.]*"' /tmp/pkgx/Distribution
+
+      - name: The build must not have written into the source tree
+        run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh"
 
   # 10.9-safety gate for the native Porthole viewer (bin/op's default GUI client),
   # built through the shared mavericks-shipyard conventions: CI installs it via the
@@ -47,6 +56,9 @@ jobs:
       - name: Install mavericks-shipyard
         uses: ModernMavericks/shipyard/.github/actions/install@v1
 
+      - name: Record the pre-build tree
+        run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh" --record
+
       - name: Ensure Rosetta (the x86_64 @ 10.9 codec test runs under it)
         run: softwareupdate --install-rosetta --agree-to-license || true
 
@@ -61,3 +73,6 @@ jobs:
 
       - name: Off-device codec test (Rosetta)
         run: shipyard-ctest --preset cross -R '^protocol$' --output-on-failure
+
+      - name: The build must not have written into the source tree
+        run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh"

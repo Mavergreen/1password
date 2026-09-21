@@ -57,6 +57,9 @@ jobs:
       - name: Install mavericks-shipyard
         uses: ModernMavericks/shipyard/.github/actions/install@v1
 
+      - name: Record the pre-build tree
+        run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh" --record
+
       - name: Decide version + whether this run publishes
         id: ver
         run: |
@@ -95,6 +98,9 @@ jobs:
           sh "$SHIPYARD_SCRIPTS/release-notes.sh" \
             --tag "${{ steps.ver.outputs.version }}" --version "${{ steps.ver.outputs.version }}" \
             --product 'Linux 1Password' --min-os 10.9 --out dist/RELEASE_NOTES.md
+
+      - name: The build must not have written into the source tree
+        run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh"
 
       - uses: actions/upload-artifact@v7
         with:
