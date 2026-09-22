@@ -1,0 +1,20 @@
+#!/bin/sh
+# ONE-TIME MIGRATION off the ModernMavericks identity (flag day 2026-09-22): this pkg's identifier
+# was dev.modernmavericks.1password, and it installed its preset into Porthole's own dir,
+# /Library/Application Support/Porthole/presets, outside the family's paths. It now installs to
+# /Library/Application Support/Mavergreen/Porthole/presets. Installer never removes what a newer
+# payload no longer carries, and the changed identifier makes this a different package, so retire
+# the old preset files (by name: other presets may still live there), the old dirs if that leaves
+# them empty, and the old receipt. Porthole reads a preset only from the path a postinstall hands
+# `porthole materialize`, so nothing else looks in the old dir.
+#
+# Run by postinstall with Installer's arguments; $3 is the target volume. Best-effort: never fails
+# the install.
+# DELETABLE once no pre-flag-day install survives (see shipyard SKILL.md "Consolidation backlog").
+[ -n "${3:-}" ] || { echo "mavericks-1password: no target volume; migrating nothing" >&2; exit 0; }
+ROOT="${3%/}"
+OLD="$ROOT/Library/Application Support/Porthole/presets"
+rm -f "$OLD/1password.conf" "$OLD/1password.menu.json"
+rmdir "$OLD" "$ROOT/Library/Application Support/Porthole" 2>/dev/null
+pkgutil --volume "$3" --forget dev.modernmavericks.1password >/dev/null 2>&1
+exit 0

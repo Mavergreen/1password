@@ -205,19 +205,19 @@ load test_helper
 @test "watch install-launchd writes a plist and loads it" {
   run env HOME="$WORK" "$OP" watch install-launchd
   [ "$status" -eq 0 ] || return 1
-  plist="$WORK/Library/LaunchAgents/dev.modernmavericks.op-watch.plist"
+  plist="$WORK/Library/LaunchAgents/dev.mavergreen.op-watch.plist"
   [ -f "$plist" ] || return 1
-  [[ "$(cat "$plist")" == *"dev.modernmavericks.op-watch"* ]] || return 1
+  [[ "$(cat "$plist")" == *"dev.mavergreen.op-watch"* ]] || return 1
   [[ "$(cat "$plist")" == *"<string>watch</string>"* ]] || return 1
   [[ "$(cat "$STUB_LOG")" == *"launchctl load"* ]] || return 1
 }
 
 @test "watch uninstall-launchd removes the plist" {
   mkdir -p "$WORK/Library/LaunchAgents"
-  : > "$WORK/Library/LaunchAgents/dev.modernmavericks.op-watch.plist"
+  : > "$WORK/Library/LaunchAgents/dev.mavergreen.op-watch.plist"
   run env HOME="$WORK" "$OP" watch uninstall-launchd
   [ "$status" -eq 0 ] || return 1
-  [ ! -f "$WORK/Library/LaunchAgents/dev.modernmavericks.op-watch.plist" ] || return 1
+  [ ! -f "$WORK/Library/LaunchAgents/dev.mavergreen.op-watch.plist" ] || return 1
 }
 
 # (Retired: "setup resolves the container build dir via ./bin/op" -- op setup no longer builds a

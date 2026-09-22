@@ -10,7 +10,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/1pm-preset.XXXXXX")
-PRESETS="$ROOT/Library/Application Support/Porthole/presets"
+PRESETS="$ROOT/Library/Application Support/Mavergreen/Porthole/presets"
 LIBEXEC="$ROOT/usr/local/libexec/mavericks-1password"
 install -d "$PRESETS" "$LIBEXEC/bin" "$ROOT/usr/local/bin"
 install -m 0644 "$REPO/1password.conf"      "$PRESETS/1password.conf"
@@ -22,7 +22,7 @@ ln -s ../libexec/mavericks-1password/bin/op "$ROOT/usr/local/bin/op"
 COMPONENT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/1pm-pkg.XXXXXX")
 mkdir -p "$(dirname "$OUT")"
 pkgbuild --root "$ROOT" \
-    --identifier dev.modernmavericks.1password \
+    --identifier dev.mavergreen.1password \
     --version "$VERSION" \
     --scripts "$HERE/scripts" \
     --install-location / \

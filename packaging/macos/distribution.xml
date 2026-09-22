@@ -7,7 +7,7 @@
     </volume-check>
     <choices-outline><line choice="default"/></choices-outline>
     <choice id="default" title="Linux 1Password">
-        <pkg-ref id="dev.modernmavericks.1password"/>
+        <pkg-ref id="dev.mavergreen.1password"/>
     </choice>
-    <pkg-ref id="dev.modernmavericks.1password" version="0">mavericks-1password-component.pkg</pkg-ref>
+    <pkg-ref id="dev.mavergreen.1password" version="0">mavericks-1password-component.pkg</pkg-ref>
 </installer-gui-script>
