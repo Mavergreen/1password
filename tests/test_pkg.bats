@@ -20,10 +20,10 @@ teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
   echo "$files" | grep -q 'usr/local/bin/op$'
 }
 
-@test "the .pkg declares a 10.9 floor and the 1password identifier" {
+@test "the .pkg declares a 10.9.5 floor and the 1password identifier" {
   sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg" >/dev/null
   pkgutil --expand "$WORK/out.pkg" "$WORK/x"
-  grep -q 'os-version min="10.9"' "$WORK/x/Distribution"
+  grep -q 'os-version min="10.9.5"' "$WORK/x/Distribution"
   grep -q 'dev.mavergreen.1password' "$WORK/x/Distribution"
 }
 
