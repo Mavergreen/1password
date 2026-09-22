@@ -8,7 +8,7 @@ setup() {
   ROOT="${BATS_TEST_DIRNAME}/.."
   # Porthole renders the recipe now; this is a cross-repo integration check that 1password.conf
   # produces the right container. Needs the porthole engine as a sibling -- skip when absent (CI).
-  GV="${PORTHOLE_DIR:-$ROOT/../mavericks-porthole}/bin/generate-viewer"
+  GV="${PORTHOLE_DIR:-$ROOT/../mavergreen-porthole}/bin/generate-viewer"
   [ -x "$GV" ] || skip "porthole engine not available as a sibling (generate-viewer)"
   GEN="$(mktemp -d "${TMPDIR:-/tmp}/gen1p.XXXXXX")"
   ( cd "$ROOT" && "$GV" 1password.conf --out "$GEN" ) >/dev/null

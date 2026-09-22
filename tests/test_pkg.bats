@@ -5,7 +5,7 @@
 
 setup() {
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
-  PORTHOLE_REPO="${PORTHOLE_DIR:-$REPO/../mavericks-porthole}"
+  PORTHOLE_REPO="${PORTHOLE_DIR:-$REPO/../mavergreen-porthole}"
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/op-pkg-test.XXXXXX")"
 }
 teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
