@@ -20,7 +20,7 @@ setup() {
 teardown() { rm -rf "$GEN"; }
 
 @test "1Password Dockerfile installs 1password from AgileBits' apt repo, on the shared base" {
-  grep -q 'FROM ghcr.io/modernmavericks/porthole-base' "$DF" || return 1   # xpra/Xvfb runtime is in the base
+  grep -q 'FROM ghcr.io/mavergreen/porthole-base' "$DF" || return 1   # xpra/Xvfb runtime is in the base
   grep -q 'downloads.1password.com/linux' "$DF" || return 1
   grep -qE 'apt-get install -y --no-install-recommends 1password 1password-cli' "$DF" || return 1
 }

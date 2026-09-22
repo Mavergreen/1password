@@ -124,7 +124,7 @@ gui_build_dir() {
   if [ -d "$_mat" ]; then printf '%s' "$_mat"; else printf '%s/1password' "$(gui_root)"; fi
 }
 
-# The Porthole engine: a sibling repo locally (ModernMavericks/porthole). ONEP_PORTHOLE_DIR overrides.
+# The Porthole engine: a sibling repo locally (Mavergreen/porthole). ONEP_PORTHOLE_DIR overrides.
 porthole_dir() { printf '%s' "${ONEP_PORTHOLE_DIR:-$(cd "$(gui_root)/.." && pwd)/mavericks-porthole}"; }
 
 # The shared auto-recovery watcher, shipped inside the installed Porthole engine. ONEP_RECOVER_WATCH overrides.
@@ -194,7 +194,7 @@ preflight_host() {
   [ -n "${DOCKER_HOST:-}" ] && return 0
   [ -n "${DOCKER_CONTEXT:-}" ] && return 0
   command -v docker-machine-ctl >/dev/null 2>&1 \
-    || die "Mavericks Container Tools not found -- install it (it provides the Docker VM 1Password runs in): https://github.com/ModernMavericks/container-tools"
+    || die "Mavericks Container Tools not found -- install it (it provides the Docker VM 1Password runs in): https://github.com/Mavergreen/container-tools"
   _w=$(docker-machine-ctl status 2>/dev/null)
   # Mark done only on a clean pass, so "done" means "preflight passed" (not merely
   # "entered") -- keeps a future retry-on-transient path correct.

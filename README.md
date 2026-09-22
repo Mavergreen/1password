@@ -1,6 +1,6 @@
 # mavericks-1password
 
-A [Porthole](https://github.com/ModernMavericks/porthole) **preset** that runs 1Password on OS X 10.9
+A [Porthole](https://github.com/Mavergreen/porthole) **preset** that runs 1Password on OS X 10.9
 (Mavericks): a native-feeling "Linux 1Password.app" plus the `op` CLI.
 
 This repo is not a viewer build -- it ships a parameter set (`1password.conf` + `1password.menu.json`)

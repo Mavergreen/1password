@@ -55,7 +55,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install mavericks-shipyard
-        uses: ModernMavericks/shipyard/.github/actions/install@v1
+        uses: Mavergreen/shipyard/.github/actions/install@v1
 
       - name: Record the pre-build tree
         run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh" --record
@@ -117,7 +117,7 @@ jobs:
     if: needs.build.outputs.publish == 'true'
     permissions:
       contents: write
-    uses: ModernMavericks/shipyard/.github/workflows/publish-release.yml@v1
+    uses: Mavergreen/shipyard/.github/workflows/publish-release.yml@v1
     with:
       version: ${{ needs.build.outputs.version }}
       artifact: onepassword
