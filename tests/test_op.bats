@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# op gui: container setup/migration and Screen Sharing.
+# op gui: container setup and Screen Sharing.
 
 load test_helper
 

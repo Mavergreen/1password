@@ -10,7 +10,7 @@ setup() {
   export CLIPBOARD_FILE="$WORK/clipboard"
   export ONEP_CONFIG_DIR="$WORK/config"
   export ONEP_SSH_AUTH_SOCK="$WORK/agent.sock"
-  # Never let op's LaunchAgent handling (incl. its flag-day migration) touch the real ~/Library.
+  # Never let op's LaunchAgent handling touch the real ~/Library.
   export ONEP_LAUNCH_AGENTS_DIR="$WORK/Library/LaunchAgents"
   export ONEP_CLIP_CLEAR_SECS=1
   export DOCKER_HOST="tcp://192.0.2.1:2376"   # preset so op skips docker-machine

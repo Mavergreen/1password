@@ -706,31 +706,6 @@ uninstall_launchd() {
   printf 'Uninstalled %s\n' "$1"
 }
 
-# ONE-TIME MIGRATION off the ModernMavericks identity (flag day 2026-09-22): these agents were
-# labeled dev.modernmavericks.op-ssh-agent / .op-watch. op writes them into the user's own
-# ~/Library/LaunchAgents at runtime, where no pkg script can reliably reach, so op moves them itself,
-# silently, on its next run. Each is re-registered under the new label with its ProgramArguments
-# untouched (only the Label string changes), so it keeps running whatever the user installed. The
-# old job goes LAST: when op is running AS that job, removing it ends this process, and by then the
-# new one is written and loaded. Idempotent: with no old plist there is nothing to do.
-# DELETABLE once no pre-flag-day install survives (see shipyard SKILL.md "Consolidation backlog").
-migrate_old_launchd_agents() {
-  for _old in dev.modernmavericks.op-ssh-agent dev.modernmavericks.op-watch; do
-    _oldplist="$LAUNCH_AGENTS_DIR/$_old.plist"
-    [ -f "$_oldplist" ] || continue
-    _new="dev.mavergreen.${_old#dev.modernmavericks.}"
-    _newplist="$LAUNCH_AGENTS_DIR/$_new.plist"
-    if [ ! -f "$_newplist" ]; then
-      sed "s#<string>$_old</string>#<string>$_new</string>#" "$_oldplist" > "$_newplist.tmp" \
-        && mv "$_newplist.tmp" "$_newplist" \
-        || { rm -f "$_newplist.tmp"; continue; }
-      launchctl load "$_newplist" >/dev/null 2>&1
-    fi
-    rm -f "$_oldplist"
-    launchctl remove "$_old" >/dev/null 2>&1
-  done
-}
-
 ssh_agent_install_launchd() {
   install_launchd "$LAUNCHD_LABEL" "$LAUNCHD_PLIST" ssh-agent start --foreground
 }
@@ -823,7 +798,6 @@ cmd_browser() {
 }
 
 main() {
-  migrate_old_launchd_agents
   [ $# -ge 1 ] || { usage >&2; exit 2; }
   _cmd=$1; shift
   case $_cmd in

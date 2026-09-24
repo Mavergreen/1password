@@ -4,7 +4,6 @@
 # resolve on first launch, as the user.
 set -eu
 CONF="/Library/Application Support/Mavergreen/Porthole/presets/1password.conf"
-sh "$(dirname "$0")/flag-day-migration" "$@" || true   # ONE-TIME MIGRATION; DELETABLE with that script
 PORTHOLE=/usr/local/bin/porthole
 [ -x "$PORTHOLE" ] || PORTHOLE="/Applications/Porthole.app/Contents/Resources/engine/bin/porthole"
 PORTHOLE_MATERIALIZE_NO_ICON=1 "$PORTHOLE" materialize "$CONF" --apps-dir /Applications
