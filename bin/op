@@ -643,6 +643,7 @@ ssh_agent_start() {
   # chain-loaded components (s6-ipcserver-socketbinder, s6-ipcserverd) resolve.
   if [ "$_foreground" -eq 1 ]; then
     PATH="$_ipcdir:$PATH"; export PATH
+    echo $$ > "$SSH_AGENT_PID"   # exec keeps this pid
     exec "$_ipc" -a 0600 "$SSH_AGENT_SOCK" \
       docker exec -i "$CONTAINER" socat STDIO UNIX-CONNECT:"$SSH_REMOTE_SOCK"
   fi

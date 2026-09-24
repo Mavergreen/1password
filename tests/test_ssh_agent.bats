@@ -92,3 +92,12 @@ load test_helper
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   [[ "$(cat "$STUB_LOG")" == *"s6-ipcserver -a 0600 "* ]] || return 1
 }
+
+# launchd runs `ssh-agent start --foreground`; the listener it execs keeps op's pid, so recording
+# that pid is what lets status (and a manual start's idempotence check) see the launchd-owned one.
+@test "ssh-agent start --foreground records the listener's pid" {
+  echo 'true' > "$STUB_DIR/docker.stdout"
+  run "$OP" ssh-agent start --foreground
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [ -s "$ONEP_CONFIG_DIR/ssh-agent.pid" ] || return 1
+}
