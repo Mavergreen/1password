@@ -29,11 +29,31 @@ load test_helper
   [[ "$j" == *'"name": "com.1password.1password"'* ]] || return 1
   [[ "$j" == *"op-browser-bridge"* ]] || return 1
   [[ "$j" == *'d634138d-c276-4fc8-924b-40a0ea21d284'* ]] || return 1
-  launcher="$(cat "$ONEP_CONFIG_DIR/op-browser-bridge")"
-  [[ "$launcher" == *"_browser-bridge"* ]] || return 1
-  [[ "$launcher" == *'"$@"'* ]] || return 1
-  [[ "$launcher" == *"PATH="* ]] || return 1
-  [[ "$output" == *"restart Momiji"* ]] || return 1
+  [[ "$output" == *"restart"* ]] || return 1
+}
+
+# The launcher used to bake in the absolute path of whichever op wrote it; that checkout was later
+# renamed, so every connection exec'd a missing file and the extension ran on its own, with its own
+# lock state (2026-09-24). It must find op when the browser runs it: browsers start native hosts with
+# a PATH that lacks /usr/local/bin, and whatever op is found gets the browser's argv unchanged.
+@test "the browser launcher runs whichever op it finds at run time, with the browser's argv" {
+  run env ONEP_BROWSER_MANIFEST="$WORK/nmh/m.json" "$OP" browser-connect
+  [ "$status" -eq 0 ] || return 1
+  ! grep -q "$(dirname "$OP")" "$ONEP_CONFIG_DIR/op-browser-bridge" || return 1
+  mkdir -p "$WORK/fakebin"
+  printf '#!/bin/sh\nprintf "%%s|" "$@" > "%s/op.argv"\n' "$WORK" > "$WORK/fakebin/op"
+  chmod +x "$WORK/fakebin/op"
+  PATH="$WORK/fakebin:/usr/bin:/bin" "$ONEP_CONFIG_DIR/op-browser-bridge" /path/to/manifest.json '{ext-id}'
+  [ "$(cat "$WORK/op.argv")" = "_browser-bridge|/path/to/manifest.json|{ext-id}|" ]
+}
+
+# The Mac side bridges with docker exec; socat runs inside the container, not on the Mac.
+@test "browser connect does not need socat on the Mac" {
+  mkdir -p "$WORK/nosocat"
+  for t in docker; do ln -s "${BATS_TEST_DIRNAME}/stubs/$t" "$WORK/nosocat/$t"; done
+  run env PATH="$WORK/nosocat:/usr/bin:/bin" ONEP_TOOLS_DIR="$WORK/nosocat" \
+      ONEP_BROWSER_MANIFEST="$WORK/nmh/m.json" "$OP" browser-connect
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
 @test "browser disconnect removes the manifest" {

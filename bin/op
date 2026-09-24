@@ -742,7 +742,7 @@ browser_bridge_cmd() {
   printf 'docker exec -i -u 1000:0 -e HOME=%s -e XDG_RUNTIME_DIR=%s %s socat STDIO EXEC:/opt/1Password/1Password-BrowserSupport' "$APP_HOME" "$APP_XDG_RUNTIME" "$CONTAINER"
 }
 
-# Invoked by Momiji as the native-messaging host; a transparent byte pipe.
+# Invoked by the browser (Momiji, PowerFox) as its native-messaging host; a transparent byte pipe.
 # Firefox passes the manifest path then the extension id; the helper needs
 # the extension id as its argv, so forward the last argument.
 browser_bridge_run() {
@@ -755,15 +755,6 @@ browser_bridge_run() {
 
 cmd_browser_bridge() {
   browser_bridge_run "$@"
-}
-
-op_abs_path() {
-  _s=$0
-  [ -L "$_s" ] && _s=$(readlink "$_s")
-  case $_s in
-    /*) printf '%s\n' "$_s" ;;
-    *) printf '%s/%s\n' "$(cd "$(dirname "$0")" && pwd)" "$(basename "$_s")" ;;
-  esac
 }
 
 browser_manifest_json() {
@@ -781,23 +772,20 @@ JSON
 cmd_browser() {
   case ${1:-} in
     connect)
-      command -v socat >/dev/null 2>&1 \
-        || die "socat not found on the Mac; install it (e.g. pkgin install socat)"
       ensure_config_dir
-      # Momiji spawns this with a minimal PATH; bake in docker's dir so the
-      # bridge can find it (docker lives in /usr/local/bin, not on that PATH)
-      _dockerdir=$(dirname "$(command -v docker 2>/dev/null || echo /usr/local/bin/docker)")
-      printf '#!/bin/sh\nPATH="%s:$PATH"\nexport PATH\nexec "%s" _browser-bridge "$@"\n' \
-        "$_dockerdir" "$(op_abs_path)" > "$BROWSER_LAUNCHER"
+      # Found by name when the browser runs it, never by where this op happens to live: a recorded
+      # path goes stale when a checkout moves. Browsers start native hosts without /usr/local/bin.
+      printf '#!/bin/sh\n# Written by `op browser connect`.\nPATH="$PATH:/usr/local/bin"; export PATH\nexec op _browser-bridge "$@"\n' \
+        > "$BROWSER_LAUNCHER"
       chmod 755 "$BROWSER_LAUNCHER"
       mkdir -p "$(dirname "$BROWSER_MANIFEST")"
       browser_manifest_json > "$BROWSER_MANIFEST"
-      printf 'Wrote %s\nNow restart Momiji, then open the 1Password extension --\n' "$BROWSER_MANIFEST"
+      printf 'Wrote %s\nNow restart Momiji or PowerFox, then open the 1Password extension --\n' "$BROWSER_MANIFEST"
       printf 'it should show "connected to 1Password for Linux".\n'
       ;;
     disconnect)
       rm -f "$BROWSER_MANIFEST"
-      printf 'Removed %s (restart Momiji to fully disconnect).\n' "$BROWSER_MANIFEST"
+      printf 'Removed %s (restart the browser to fully disconnect).\n' "$BROWSER_MANIFEST"
       ;;
     *) die "usage: op browser connect|disconnect" 2 ;;
   esac
