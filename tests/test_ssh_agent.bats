@@ -81,3 +81,14 @@ load test_helper
   [[ "$log" == *"launchctl unload"* ]] || return 1
   [ ! -f "$WORK/Library/LaunchAgents/dev.mavergreen.op-ssh-agent.plist" ] || return 1
 }
+
+# launchd starts the installed agent with PATH=/usr/bin:/bin:/usr/sbin:/sbin, where neither the
+# docker CLI nor Container Tools lives; op must still find them where they are installed.
+@test "ssh-agent start works under launchd's bare PATH" {
+  echo 'true' > "$STUB_DIR/docker.stdout"
+  unset DOCKER_HOST
+  ONEP_TOOLS_DIR="${BATS_TEST_DIRNAME}/stubs" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    run "$OP" ssh-agent start
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$(cat "$STUB_LOG")" == *"s6-ipcserver -a 0600 "* ]] || return 1
+}

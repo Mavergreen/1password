@@ -3,6 +3,11 @@
 # Design: docs/superpowers/specs/2026-07-07-mavericks-1password-design.md
 set -u
 
+# The docker CLI and Container Tools install here. launchd (the ssh-agent and watch agents) and
+# browser native-messaging hosts start op with a PATH that lacks it, so append it; a caller's own
+# PATH still wins.
+PATH="$PATH:${ONEP_TOOLS_DIR:-/usr/local/bin}"; export PATH
+
 ONEP_CONFIG_DIR="${ONEP_CONFIG_DIR:-$HOME/.config/1p}"
 SESSION_FILE="$ONEP_CONFIG_DIR/session"
 DOCKER_ENV_FILE="$ONEP_CONFIG_DIR/docker-env"

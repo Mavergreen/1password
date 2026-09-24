@@ -77,6 +77,7 @@ EOF
 @test "preflight: Container Tools not installed -> install hint" {
   unset DOCKER_HOST DOCKER_CONTEXT
   PATH="/usr/bin:/bin"   # no docker-machine-ctl anywhere
+  export ONEP_TOOLS_DIR="$WORK/empty"; mkdir -p "$ONEP_TOOLS_DIR"
   OP_LIB=1 . "$OP"
   run preflight_host
   [ "$status" -ne 0 ] || return 1
