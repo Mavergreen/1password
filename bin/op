@@ -9,7 +9,6 @@ set -u
 PATH="$PATH:${ONEP_TOOLS_DIR:-/usr/local/bin}"; export PATH
 
 ONEP_CONFIG_DIR="${ONEP_CONFIG_DIR:-$HOME/.config/1p}"
-SESSION_FILE="$ONEP_CONFIG_DIR/session"
 DOCKER_ENV_FILE="$ONEP_CONFIG_DIR/docker-env"
 # op no longer owns or builds a container. Porthole builds, runs, and NAMES the single
 # 1Password container (the very one the GUI viewer uses), resolved from its spec inside the
@@ -40,6 +39,7 @@ SSH_AGENT_PID="$ONEP_CONFIG_DIR/ssh-agent.pid"
 SSH_REMOTE_SOCK="${ONEP_SSH_REMOTE_SOCK:-/home/onepassword/.1password/agent.sock}"
 # The browser-support socket is $XDG_RUNTIME_DIR/1Password-BrowserSupport.sock, so
 # the helper must run with the instance's HOME + runtime dir.
+APP_USER="${ONEP_APP_USER:-onepassword}"
 APP_HOME="${ONEP_APP_HOME:-/home/onepassword}"
 APP_XDG_RUNTIME="${ONEP_APP_XDG_RUNTIME:-/run/user/1000}"
 LAUNCH_AGENTS_DIR="${ONEP_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
@@ -68,9 +68,7 @@ usage() {
   cat <<'EOF'
 usage: op <command> [arguments]
 
-  setup          one-time container + account setup
-  signin         start a session (asks master password)
-  signout        end the session
+  setup          one-time container setup (the CLI signs in through the app)
   lock           lock the app (and browser/SSH/CLI) from the terminal
   unlock         unlock the app from the terminal (asks master password; no VNC)
   approve        authorize a pending 1Password prompt (e.g. SSH-key use); no VNC
@@ -83,13 +81,13 @@ usage: op <command> [arguments]
                  (gui stop: shut down)
   ssh-agent ...  use 1Password's SSH agent from the Mac (start|stop|status|
                  install-launchd|uninstall-launchd)
-  browser connect|disconnect   wire Momiji's 1Password extension to the app
+  browser connect|disconnect   wire Momiji's or PowerFox's 1Password extension to the app
   op <args>      explicit pass-through (if a real op command ever
                  shadows a name above)
 
-Anything not listed above passes through to the containerized `op` verbatim
-with the session applied: `op item list`, `op item get X`, `op vault list`,
-`op whoami`, ...
+Anything not listed above passes through to the containerized `op` verbatim,
+signed in through the Linux 1Password app: `op item list`, `op item get X`,
+`op vault list`, `op whoami`, ...
 EOF
 }
 
@@ -247,19 +245,7 @@ _load_docker_endpoint() {
 # belong to Porthole's launcher (the single owner of the container's lifecycle), so op no longer
 # duplicates them -- it just opens the app, which nudges if a rebuild is due.
 
-# --- session -------------------------------------------------------------------
-
-read_session() {
-  [ -f "$SESSION_FILE" ] && cat "$SESSION_FILE"
-  return 0
-}
-
-save_session() {
-  ensure_config_dir
-  # umask in a subshell so the file is born 600 -- no chmod race window
-  (umask 077; printf '%s\n' "$1" > "$SESSION_FILE") 2>/dev/null \
-    || die "cannot write session file $SESSION_FILE"
-}
+# --- master password -----------------------------------------------------------
 
 # prompt for the master password without echo; leaves it in $_pw
 read_master_password() {
@@ -282,19 +268,6 @@ scrub_clipboard_if_pw() {
     printf '' | pbcopy
     printf 'Cleared your master password from the clipboard.\n' >&2
   fi
-}
-
-cmd_signin() {
-  load_docker_env
-  read_master_password
-  [ -n "$_pw" ] || die "empty password; not signing in"
-  _tok=$(printf '%s\n' "$_pw" | docker exec -i "$CONTAINER" op signin --raw)
-  _rc=$?
-  scrub_clipboard_if_pw "$_pw"
-  _pw=
-  [ "$_rc" -eq 0 ] && [ -n "$_tok" ] || die "sign-in failed"
-  save_session "$_tok"
-  printf 'Signed in; session cached (expires after ~30 minutes idle).\n' >&2
 }
 
 # --- app lock state (drive the containerized app's GUI, no VNC needed) --------
@@ -399,17 +372,12 @@ cmd_watch() {
   done
 }
 
-cmd_signout() {
-  _sess=$(read_session)
-  # local kill switch first -- must work even when the VM is unreachable
-  rm -f "$SESSION_FILE"
-  if [ -n "$_sess" ]; then
-    (load_docker_env && docker exec -i "$CONTAINER" op signout --session "$_sess") >/dev/null 2>&1
-  fi
-  printf 'Signed out; local session cleared.\n'
-}
-
 # --- running op ----------------------------------------------------------------
+
+# The CLI goes through the desktop app (Settings > Developer > Integrate with 1Password CLI): it runs
+# as the app's own user in the app's session, so the app's unlock is its sign-in and locking the app
+# locks it -- the same lock state the browser extension and the SSH agent follow.
+cli_as_app() { printf '%s' "-u $APP_USER -e HOME=$APP_HOME -e XDG_RUNTIME_DIR=$APP_XDG_RUNTIME"; }
 
 # NOTE: when op_run is called inside $(), a die/exit here terminates only the
 # subshell -- callers must check the substitution's exit status, e.g.:
@@ -417,7 +385,6 @@ cmd_signout() {
 op_run() {
   load_docker_env
   _env_retried=0
-  _auth_retried=0
   _errfile="${TMPDIR:-/tmp}/1p-stderr.$$"
   # Live mode (human at a terminal): give op a real pty so prompts and colors
   # work, streaming the merged output while also teeing it into _errfile for
@@ -429,24 +396,14 @@ op_run() {
     *) if [ -t 0 ] && [ -t 1 ]; then _live=1; else _live=0; fi ;;
   esac
   while :; do
-    _sess=$(read_session)
     if [ "$_live" -eq 1 ]; then
       _rcfile="$_errfile.rc"
-      if [ -n "$_sess" ]; then
-        { docker exec -it "$CONTAINER" op "$@" --session "$_sess" 2>&1
-          echo $? > "$_rcfile"; } | tee "$_errfile"
-      else
-        { docker exec -it "$CONTAINER" op "$@" 2>&1
-          echo $? > "$_rcfile"; } | tee "$_errfile"
-      fi
+      { docker exec -it $(cli_as_app) "$CONTAINER" op "$@" 2>&1
+        echo $? > "$_rcfile"; } | tee "$_errfile"
       _rc=$(cat "$_rcfile" 2>/dev/null || echo 1)
       rm -f "$_rcfile"
     else
-      if [ -n "$_sess" ]; then
-        docker exec -i "$CONTAINER" op "$@" --session "$_sess" 2>"$_errfile"
-      else
-        docker exec -i "$CONTAINER" op "$@" 2>"$_errfile"
-      fi
+      docker exec -i $(cli_as_app) "$CONTAINER" op "$@" 2>"$_errfile"
       _rc=$?
     fi
     if [ "$_rc" -eq 0 ]; then
@@ -469,13 +426,10 @@ op_run() {
       rm -f "$_errfile"
       die "op container '$CONTAINER' is not available; run: op setup"
     fi
-    if grep -qiE 'session expired|not currently signed in|not signed in|sign in to create a new session|401: authentication' "$_errfile"; then
-      if [ "$_auth_retried" -eq 0 ]; then
-        _auth_retried=1
-        rm -f "$_errfile"
-        cmd_signin || exit 1
-        continue
-      fi
+    if grep -qiE 'authorization prompt dismissed|authorization timeout|not currently signed in|account is not signed in|app is locked|connecting to desktop app' "$_errfile"; then
+      [ "$_live" -eq 1 ] || cat "$_errfile" >&2
+      rm -f "$_errfile"
+      die "the CLI signs in through the Linux 1Password app: run op signin, then unlock the app (or: op unlock) and allow access in its prompt (or: op approve)" "$_rc"
     fi
     [ "$_live" -eq 1 ] || cat "$_errfile" >&2
     rm -f "$_errfile"
@@ -587,23 +541,14 @@ cmd_setup() {
   # shellcheck disable=SC2086  # $_up is intentionally unquoted (empty -> no argument)
   "$(porthole_bin)" up $_up "$(container_spec)" \
     || die "container bring-up failed -- is Porthole installed and the 1Password app materialized? (reinstall the 1Password preset)"
-  # named volumes are born root:root 755; op refuses config dirs looser than 700
-  docker exec -i "$CONTAINER" chmod 700 /root/.config/op \
-    || die "cannot tighten permissions on the op config volume"
-  _accounts=$(docker exec -i "$CONTAINER" op account list --format json)
-  case $_accounts in
+  # Accounts belong to the app; the CLI reaches them through it. Just check that it can.
+  case $(docker exec -i $(cli_as_app) "$CONTAINER" op account list --format json 2>/dev/null) in
     ''|'[]')
-      echo "Adding your 1Password account; have your sign-in address, email,"
-      echo "Secret Key, and master password ready."
-      # -t only when we actually have a terminal; docker refuses -t otherwise
-      if [ -t 0 ]; then _tty=-it; else _tty=-i; fi
-      docker exec $_tty "$CONTAINER" op account add || die "op account add failed"
+      echo "The CLI can't see a 1Password account yet. Open Linux 1Password (op gui), sign in, and turn on"
+      echo "Settings > Developer > Integrate with 1Password CLI."
       ;;
-    *)
-      echo "1Password account already configured."
-      ;;
+    *) echo "Setup complete: the CLI signs in through the Linux 1Password app." ;;
   esac
-  echo "Setup complete. Next: op signin   (GUI: op gui)"
 }
 
 # --- ssh agent ---------------------------------------------------------------
@@ -796,8 +741,6 @@ main() {
   _cmd=$1; shift
   case $_cmd in
     setup)   cmd_setup "$@" ;;
-    signin)  cmd_signin "$@" ;;
-    signout) cmd_signout "$@" ;;
     lock)    cmd_lock "$@" ;;
     unlock)  cmd_unlock "$@" ;;
     approve) cmd_approve "$@" ;;

@@ -14,7 +14,7 @@ load test_helper
   run "$OP" vault list
   [ "$status" -eq 0 ] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"exec -i 1password-gui op vault list"* ]] || return 1
+  [[ "$log" == *"exec -i -u onepassword -e HOME=/home/onepassword -e XDG_RUNTIME_DIR=/run/user/1000 1password-gui op vault list"* ]] || return 1
 }
 
 @test "interactive mode uses tty exec" {
@@ -23,7 +23,7 @@ load test_helper
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *"vaults here"* ]] || return 1
   log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"exec -it 1password-gui op vault list"* ]] || return 1
+  [[ "$log" == *"exec -it -u onepassword -e HOME=/home/onepassword -e XDG_RUNTIME_DIR=/run/user/1000 1password-gui op vault list"* ]] || return 1
 }
 
 @test "interactive mode propagates exit code" {
@@ -64,89 +64,12 @@ load test_helper
   [[ "$log" == *"docker-machine env default"* ]] || return 1
 }
 
-@test "signin saves token with tight perms" {
-  echo 'TOKEN123' > "$STUB_DIR/docker.stdout"
-  run bash -c 'printf "hunter2\n" | "$0" signin' "$OP"
-  [ "$status" -eq 0 ] || return 1
-  [ "$(cat "$ONEP_CONFIG_DIR/session")" = "TOKEN123" ] || return 1
-  [ "$(stat -f %Lp "$ONEP_CONFIG_DIR/session")" = "600" ] || return 1
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"exec -i 1password-gui op signin --raw"* ]] || return 1
-}
-
-@test "signin refuses empty password" {
-  run bash -c 'printf "\n" | "$0" signin' "$OP"
-  [ "$status" -eq 1 ] || return 1
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" != *"op signin"* ]] || return 1
-}
-
-@test "signin leaves unrelated clipboard alone" {
-  printf 'grocery list' | pbcopy
-  echo 'TOKEN123' > "$STUB_DIR/docker.stdout"
-  run bash -c 'printf "hunter2\n" | "$0" signin' "$OP"
-  [ "$(cat "$CLIPBOARD_FILE")" = "grocery list" ] || return 1
-}
-
-
-@test "signout clears session" {
-  mkdir -p "$ONEP_CONFIG_DIR"
-  echo 'TOK' > "$ONEP_CONFIG_DIR/session"
-  run "$OP" signout
-  [ "$status" -eq 0 ] || return 1
-  [ ! -f "$ONEP_CONFIG_DIR/session" ] || return 1
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"op signout --session TOK"* ]] || return 1
-}
-
-@test "session flag appended when cached" {
-  mkdir -p "$ONEP_CONFIG_DIR"
-  echo 'TOK' > "$ONEP_CONFIG_DIR/session"
-  run "$OP" op whoami
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"op whoami --session TOK"* ]] || return 1
-}
-
-@test "no session flag without cache" {
-  run "$OP" op whoami
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" != *" --session"* ]] || return 1
-}
-
-@test "expired session triggers resignin and retry" {
-  mkdir -p "$ONEP_CONFIG_DIR"
-  echo 'OLDTOK' > "$ONEP_CONFIG_DIR/session"
-  echo '[ERROR] 2026/07/07 session expired, sign in to create a new session' > "$STUB_DIR/docker.stderr.1"
-  echo 1 > "$STUB_DIR/docker.exit.1"
-  echo 'NEWTOK' > "$STUB_DIR/docker.stdout.2"
-  echo 'amitai@example.com' > "$STUB_DIR/docker.stdout.3"
-  run bash -c 'printf "hunter2\n" | "$0" op whoami 2>/dev/null' "$OP"
-  [ "$status" -eq 0 ] || return 1
-  [ "$output" = "amitai@example.com" ] || return 1
-  [ "$(cat "$ONEP_CONFIG_DIR/session")" = "NEWTOK" ] || return 1
-  [ "$(cat "$STUB_DIR/docker.calls")" = "3" ] || return 1
-}
-
 @test "missing container suggests setup" {
   echo 'Error: No such container: 1password-gui' > "$STUB_DIR/docker.stderr"
   echo 1 > "$STUB_DIR/docker.exit"
   run "$OP" op whoami
   [ "$status" -eq 1 ] || return 1
   [[ "$output" == *"op setup"* ]] || return 1
-}
-
-@test "second auth error not retried again" {
-  mkdir -p "$ONEP_CONFIG_DIR"
-  echo 'OLDTOK' > "$ONEP_CONFIG_DIR/session"
-  echo '[ERROR] session expired, sign in to create a new session' > "$STUB_DIR/docker.stderr.1"
-  echo 1 > "$STUB_DIR/docker.exit.1"
-  echo 'NEWTOK' > "$STUB_DIR/docker.stdout.2"
-  echo '[ERROR] session expired, sign in to create a new session' > "$STUB_DIR/docker.stderr.3"
-  echo 1 > "$STUB_DIR/docker.exit.3"
-  run bash -c 'printf "hunter2\n" | "$0" op whoami' "$OP"
-  [ "$status" -eq 1 ] || return 1
-  [ "$(cat "$STUB_DIR/docker.calls")" = "3" ] || return 1
-  [[ "$output" == *"session expired"* ]] || return 1
 }
 
 @test "copy puts password on clipboard" {
@@ -208,4 +131,41 @@ load test_helper
   run bash -c 'printf "" | "$0" clip' "$OP"
   [ "$status" -eq 1 ] || return 1
   [[ "$output" == *"nothing on stdin"* ]] || return 1
+}
+
+# The CLI goes through the desktop app (Settings > Developer > Integrate with 1Password CLI): it runs
+# as the app's user, the app's unlock is its sign-in, and locking the app locks it. So op never
+# passes a session of its own, even if an old session file is lying around.
+@test "the CLI runs as the app's user and never passes a session of its own" {
+  mkdir -p "$ONEP_CONFIG_DIR"; echo 'STALE' > "$ONEP_CONFIG_DIR/session"
+  run "$OP" op whoami
+  log="$(cat "$STUB_LOG")"
+  [[ "$log" == *"exec -i -u onepassword -e HOME=/home/onepassword -e XDG_RUNTIME_DIR=/run/user/1000 1password-gui op whoami"* ]] || { echo "$log"; return 1; }
+  [[ "$log" != *"--session"* ]] || return 1
+}
+
+@test "signin and signout pass straight through to the CLI" {
+  run "$OP" signin
+  run "$OP" signout
+  log="$(cat "$STUB_LOG")"
+  [[ "$log" == *"1password-gui op signin"* ]] || return 1
+  [[ "$log" == *"1password-gui op signout"* ]] || return 1
+}
+
+@test "a locked app or a dismissed prompt says how to unlock or approve" {
+  echo '[ERROR] 2026/09/24 19:10:00 error initializing client: authorization prompt dismissed, please try again' > "$STUB_DIR/docker.stderr"
+  echo 1 > "$STUB_DIR/docker.exit"
+  run "$OP" vault list
+  [ "$status" -eq 1 ] || return 1
+  [[ "$output" == *"op unlock"* ]] || return 1
+  [[ "$output" == *"op approve"* ]] || return 1
+}
+
+# whoami (and anything else that only reads state) never prompts, so the hint must name a command that does.
+@test "not signed in says to run op signin, which asks the app" {
+  echo '[ERROR] 2026/09/24 22:29:15 account is not signed in' > "$STUB_DIR/docker.stderr"
+  echo 1 > "$STUB_DIR/docker.exit"
+  run "$OP" whoami
+  [ "$status" -eq 1 ] || return 1
+  [[ "$output" == *"op signin"* ]] || return 1
 }

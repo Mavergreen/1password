@@ -75,7 +75,7 @@ teardown() { rm -rf "$GEN"; }
   grep -q 'exec 1password --disable-gpu --user-data-dir=' "$CHILD" || return 1
 }
 
-@test "container spec fully provisions the ONE shared container: SYS_PTRACE + the op CLI-config volume" {
+@test "container spec provisions the ONE shared container: SYS_PTRACE, and no CLI-only volume" {
   # The whole point of the companion-CLI fix: the GUI and `op` CLI share a single container that
   # carries what BOTH need. PTRACE=yes must reach docker run as a --cap-add (via CAPS), and the op
   # CLI-config volume must be declared -- both resolved into the spec Porthole's `up` reads.
@@ -83,5 +83,5 @@ teardown() { rm -rf "$GEN"; }
   [ -f "$spec" ] || { echo "no spec at $spec"; return 1; }
   grep -q "CONTAINER='1password-gui'" "$spec" || return 1
   grep -q "CAPS='SYS_PTRACE'" "$spec" || return 1
-  grep -q "EXTRA_VOLUMES='1password-cli-config:/root/.config/op'" "$spec" || return 1
+  ! grep -q "cli-config" "$spec" || return 1   # the CLI signs in through the app, not on its own
 }

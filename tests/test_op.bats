@@ -8,34 +8,29 @@ load test_helper
 # Porthole's own template tests + test_1password.bats (which generates the recipe from the conf).
 
 # op no longer builds/runs/names its OWN container. Porthole is the single creator: `op setup`
-# delegates to `porthole up <spec>` (the porthole stub logs it), then op only chmods the CLI-config
-# volume + adds the account via `docker exec` into the Porthole-named container (1password-gui).
-@test "fresh setup brings the container up via Porthole and prompts account add" {
-  # docker calls: 1 chmod, 2 account list (empty -> add), 3 account add
-  echo '[]' > "$STUB_DIR/docker.stdout.2"
+# delegates to `porthole up <spec>` (the porthole stub logs it). Accounts belong to the app; the CLI
+# reaches them through it, so setup only checks that it can.
+@test "setup brings the container up via Porthole and adds no account of its own" {
+  printf '[{"url":"my.1password.com"}]\n' > "$STUB_DIR/docker.stdout.1"
   run "$OP" setup
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   log="$(cat "$STUB_LOG")"
   [[ "$log" == *"porthole up "*"1password.container"* ]] || { echo "$log"; return 1; }
-  [[ "$log" != *"docker build"* ]] || return 1        # op builds nothing itself now
-  [[ "$log" != *"run -d --name"* ]] || return 1        # op runs no container itself now
-  [[ "$log" == *"chmod 700 /root/.config/op"* ]] || return 1
-  [[ "$log" == *"1password-gui op account add"* ]] || return 1
-  [[ "$output" == *"op signin"* ]] || return 1
-}
-
-@test "setup with an account already configured skips account add" {
-  printf '[{"url":"my.1password.com"}]\n' > "$STUB_DIR/docker.stdout.2"   # account list (call 2)
-  run "$OP" setup
-  [ "$status" -eq 0 ] || return 1
-  log="$(cat "$STUB_LOG")"
-  [[ "$log" == *"porthole up "* ]] || return 1
+  [[ "$log" != *"docker build"* ]] || return 1
+  [[ "$log" != *"run -d --name"* ]] || return 1
   [[ "$log" != *"account add"* ]] || return 1
-  [[ "$output" == *"already configured"* ]] || return 1
+  [[ "$log" != *"/root/.config/op"* ]] || return 1
+  [[ "$log" == *"-u onepassword"*"1password-gui op account list"* ]] || return 1
 }
 
+@test "setup with no account visible says to sign in to the app and turn on CLI integration" {
+  echo '[]' > "$STUB_DIR/docker.stdout.1"
+  run "$OP" setup
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$output" == *"Integrate with 1Password CLI"* ]] || return 1
+}
 @test "setup --rebuild passes --rebuild through to porthole up" {
-  printf '[{"url":"x"}]\n' > "$STUB_DIR/docker.stdout.2"
+  printf '[{"url":"x"}]\n' > "$STUB_DIR/docker.stdout.1"
   run "$OP" setup --rebuild
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   [[ "$(cat "$STUB_LOG")" == *"porthole up --rebuild "*"1password.container"* ]] || { cat "$STUB_LOG"; return 1; }
@@ -93,27 +88,6 @@ load test_helper
   log="$(cat "$STUB_LOG")"
   [[ "$log" == *"docker context inspect mavericks"* ]] || return 1
   [[ "$log" == *"docker-machine env default"* ]] || return 1
-}
-
-@test "signin scrubs pasted master password" {
-  printf 'hunter2' | pbcopy
-  echo 'TOKEN123' > "$STUB_DIR/docker.stdout"
-  run bash -c 'printf "hunter2\n" | "$0" signin' "$OP"
-  [ "$status" -eq 0 ] || return 1
-  [ "$(cat "$CLIPBOARD_FILE")" = "" ] || return 1
-  [[ "$output" == *"Cleared your master password"* ]] || return 1
-}
-
-@test "signin fails loudly when config dir unwritable" {
-  _parent="$WORK/lockedparent"
-  mkdir -p "$_parent"
-  chmod 500 "$_parent"
-  echo 'TOKEN123' > "$STUB_DIR/docker.stdout"
-  run bash -c 'printf "hunter2\n" | ONEP_CONFIG_DIR="$1/1p" "$0" signin' "$OP" "$_parent"
-  chmod 700 "$_parent"
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"cannot write"* ]] || return 1
-  [[ "$output" != *"Signed in"* ]] || return 1
 }
 
 @test "lock sends the lock shortcut to the app" {
