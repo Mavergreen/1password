@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: host-agnostic
 # op gui: container setup and Screen Sharing.
 
 load test_helper

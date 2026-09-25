@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: host-agnostic
 # Milestone 3: the generator must reproduce 1Password's ACTIVE container behavior
 # (the hard case) from apps/1password.conf -- printing/CUPS, ambient CAP_SYS_PTRACE,
 # app-created group, browser allowlist, CLI-support pkgs -- while SHEDDING the VNC

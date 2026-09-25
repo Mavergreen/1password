@@ -1,12 +1,13 @@
 #!/bin/sh
+# platform: macOS-only -- installs LaunchAgents with launchctl and runs the Mac's Porthole app
 # op -- Docker-backed 1Password CLI on OS X Mavericks, via the Linux `op` CLI in Docker.
 # Design: docs/superpowers/specs/2026-07-07-mavericks-1password-design.md
 set -u
 
-# The docker CLI and Container Tools install here. launchd (the ssh-agent and watch agents) and
-# browser native-messaging hosts start op with a PATH that lacks it, so append it; a caller's own
-# PATH still wins.
-PATH="$PATH:${ONEP_TOOLS_DIR:-/usr/local/bin}"; export PATH
+# The docker CLI and Container Tools' commands are on the path through /usr/local/mavergreen/bin.
+# launchd (the ssh-agent and watch agents) and browser native-messaging hosts start op with a PATH
+# that lacks it, so append it; a caller's own PATH still wins.
+PATH="$PATH:${ONEP_TOOLS_DIR:-/usr/local/mavergreen/bin}"; export PATH
 
 ONEP_CONFIG_DIR="${ONEP_CONFIG_DIR:-$HOME/.config/1p}"
 DOCKER_ENV_FILE="$ONEP_CONFIG_DIR/docker-env"
@@ -97,7 +98,7 @@ ensure_config_dir() {
   [ -w "$ONEP_CONFIG_DIR" ] || die "cannot write to $ONEP_CONFIG_DIR -- wrong owner? (a sudo'd run creates it as root; fix: sudo rm -rf $ONEP_CONFIG_DIR)"
 }
 
-# The real repo root of this script, resolving a /usr/local/bin or ~/bin symlink (and
+# The real repo root of this script, resolving a /usr/local/mavergreen/bin or ~/bin symlink (and
 # relative/./bin/op invocation), so sibling assets (1password/, build-native/, bin/) are
 # found however op was invoked. $0 alone points at the symlink, not the real tree.
 gui_root() {
@@ -616,10 +617,23 @@ ssh_agent_status() {
   return 1
 }
 
+op_abs_path() {
+  _s=$0
+  case $_s in /*) ;; *) _s="$(cd "$(dirname "$_s")" && pwd)/$(basename "$_s")" ;; esac
+  while [ -L "$_s" ]; do
+    _l=$(readlink "$_s")
+    case $_l in
+      /*) _s=$_l ;;
+      *) _s="$(cd "$(dirname "$_s")" && cd "$(dirname "$_l")" && pwd)/$(basename "$_l")" ;;
+    esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$_s")" && pwd -P)" "$(basename "$_s")"
+}
+
 # $1 = Label; remaining args = the op subcommand for ProgramArguments
 launchd_plist_xml() {
   _lbl=$1; shift
-  _op_abs=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+  _op_abs=$(op_abs_path)
   cat <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -719,8 +733,9 @@ cmd_browser() {
     connect)
       ensure_config_dir
       # Found by name when the browser runs it, never by where this op happens to live: a recorded
-      # path goes stale when a checkout moves. Browsers start native hosts without /usr/local/bin.
-      printf '#!/bin/sh\n# Written by `op browser connect`.\nPATH="$PATH:/usr/local/bin"; export PATH\nexec op _browser-bridge "$@"\n' \
+      # path goes stale when a checkout moves. Browsers start native hosts without
+      # /usr/local/mavergreen/bin, through which op is on the path.
+      printf '#!/bin/sh\n# Written by `op browser connect`.\nPATH="$PATH:/usr/local/mavergreen/bin"; export PATH\nexec op _browser-bridge "$@"\n' \
         > "$BROWSER_LAUNCHER"
       chmod 755 "$BROWSER_LAUNCHER"
       mkdir -p "$(dirname "$BROWSER_MANIFEST")"

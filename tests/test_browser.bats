@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: host-agnostic
 # op browser: bridge command + manifest (unit), connect/disconnect.
 
 load test_helper
@@ -35,10 +36,11 @@ load test_helper
 # The launcher used to bake in the absolute path of whichever op wrote it; that checkout was later
 # renamed, so every connection exec'd a missing file and the extension ran on its own, with its own
 # lock state (2026-09-24). It must find op when the browser runs it: browsers start native hosts with
-# a PATH that lacks /usr/local/bin, and whatever op is found gets the browser's argv unchanged.
+# a PATH that lacks /usr/local/mavergreen/bin, and whatever op is found gets the browser's argv unchanged.
 @test "the browser launcher runs whichever op it finds at run time, with the browser's argv" {
   run env ONEP_BROWSER_MANIFEST="$WORK/nmh/m.json" "$OP" browser-connect
   [ "$status" -eq 0 ] || return 1
+  grep -qx 'PATH="$PATH:/usr/local/mavergreen/bin"; export PATH' "$ONEP_CONFIG_DIR/op-browser-bridge" || return 1
   ! grep -q "$(dirname "$OP")" "$ONEP_CONFIG_DIR/op-browser-bridge" || return 1
   mkdir -p "$WORK/fakebin"
   printf '#!/bin/sh\nprintf "%%s|" "$@" > "%s/op.argv"\n' "$WORK" > "$WORK/fakebin/op"

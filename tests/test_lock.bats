@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: host-agnostic
 # op lock-state poller: publishes "locked"/"unlocked" to LOCK_STATE_FILE (which the
 # Porthole viewer polls to badge its menu-bar glyph). Unit-tested via OP_LIB sourcing.
 

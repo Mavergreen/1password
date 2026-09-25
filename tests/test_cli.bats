@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: host-agnostic
 # op CLI: dispatch, docker-env, session, clipboard.
 
 load test_helper

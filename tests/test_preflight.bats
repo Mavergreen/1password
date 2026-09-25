@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: host-agnostic
 # op host preflight: Container Tools -> Fusion checks via `docker-machine-ctl status`.
 # preflight_host reuses Container Tools' status contract. We source op as a library
 # (OP_LIB=1) and drive the function directly with a stubbed ctl on a controlled PATH.

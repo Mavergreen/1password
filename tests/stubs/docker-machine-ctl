@@ -1,4 +1,5 @@
 #!/bin/sh
+# platform: host-agnostic
 # Stub Mavericks Container Tools ctl: the preflight (op's preflight_host) calls
 # `docker-machine-ctl status`. Report a healthy VM so preflight passes and the
 # routing/behavior under test runs. Override per-test by putting a different stub

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: host-agnostic
 # op ssh-agent: bridge command (unit), listener lifecycle, launchd.
 
 load test_helper
@@ -70,6 +71,18 @@ load test_helper
   [[ "$plist" == *"--foreground"* ]] || return 1
   log="$(cat "$STUB_LOG")"
   [[ "$log" == *"launchctl load"* ]] || return 1
+}
+
+@test "install-launchd run through a farm-style link records op's resolved tree path" {
+  mkdir -p "$WORK/tree/bin" "$WORK/farm/bin"
+  cp "$OP" "$WORK/tree/bin/op"
+  ln -s ../../tree/bin/op "$WORK/farm/bin/op"
+  run env HOME="$WORK" "$WORK/farm/bin/op" ssh-agent install-launchd
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  plist="$(cat "$WORK/Library/LaunchAgents/dev.mavergreen.op-ssh-agent.plist")"
+  real="$(cd "$WORK/tree/bin" && pwd -P)/op"
+  [[ "$plist" == *"<string>$real</string>"* ]] || { echo "$plist"; return 1; }
+  [[ "$plist" != *"farm/bin/op"* ]] || { echo "$plist"; return 1; }
 }
 
 @test "ssh-agent uninstall-launchd removes plist" {

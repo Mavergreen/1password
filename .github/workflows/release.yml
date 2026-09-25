@@ -94,7 +94,7 @@ jobs:
           sh packaging/macos/build_pkg.sh "${{ steps.ver.outputs.version }}" \
              "$ONEP_DIST_DIR/mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
 
-      # --min-os must say what the pkg declares (packaging/macos/distribution.xml).
+      # --min-os must say what the pkg declares (set_install_floor.sh in packaging/macos/build_pkg.sh).
       - name: Generate release notes
         run: |
           set -eu

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# platform: macOS-only -- pkgbuild, pkgutil and PlistBuddy build and read the .pkg
 # The 1Password PRESET .pkg: it ships the parameter set (1password.conf + 1password.menu.json) and
 # the bin/op CLI; its postinstall asks Porthole to materialize "Linux 1Password.app". Runs only where
 # Apple's pkg tooling exists (the Mavericks dev box and the macOS CI runner).
@@ -10,34 +11,75 @@ setup() {
 }
 teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
 
-@test "the preset .pkg ships the conf, the menu manifest, and the op CLI + symlink" {
+@test "the preset .pkg ships op and the preset in its tree, and nothing in /usr/local/bin" {
   run sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg"
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-  files="$(pkgutil --payload-files "$WORK/out.pkg")"
-  echo "$files" | grep -q 'Library/Application Support/Mavergreen/Porthole/presets/1password.conf'
-  echo "$files" | grep -q 'Library/Application Support/Mavergreen/Porthole/presets/1password.menu.json'
-  echo "$files" | grep -q 'usr/local/libexec/mavericks-1password/bin/op'
-  echo "$files" | grep -q 'usr/local/bin/op$'
+  pkgutil --expand "$WORK/out.pkg" "$WORK/x"
+  files="$(lsbom -s "$WORK/x/mavericks-1password-component.pkg/Bom")"
+  echo "$files" | grep -q 'usr/local/mavergreen/1password/bin/op$'
+  echo "$files" | grep -q 'usr/local/mavergreen/1password/share/porthole/presets/1password.conf$'
+  echo "$files" | grep -q 'usr/local/mavergreen/1password/share/porthole/presets/1password.menu.json$'
+  echo "$files" | grep -q 'usr/local/mavergreen/1password/mavergreen.plist$'
+  if echo "$files" | grep -q 'usr/local/bin/'; then false; fi
 }
 
-@test "the .pkg declares a 10.9.5 floor and the 1password identifier" {
+@test "the .pkg declares a 10.9.5 floor, the base first, and the 1password identifier" {
   sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg" >/dev/null
   pkgutil --expand "$WORK/out.pkg" "$WORK/x"
   grep -q 'os-version min="10.9.5"' "$WORK/x/Distribution"
   grep -q 'dev.mavergreen.1password' "$WORK/x/Distribution"
+  [ "$(sed -n 's/.*<line choice="\([^"]*\)".*/\1/p' "$WORK/x/Distribution" | grep -v '^default$' | head -1)" = dev.mavergreen.base ]
 }
 
-@test "preinstall refuses to install when Porthole is absent" {
-  sed 's#/usr/local/bin/porthole#/nope/porthole#g; s#/Applications/Porthole.app#/nope/Porthole.app#g' \
-    "$REPO/packaging/macos/scripts/preinstall" > "$WORK/pre"; chmod 755 "$WORK/pre"
-  run sh "$WORK/pre"
+@test "the manifest declares the materialized app, so uninstall removes it" {
+  sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg" >/dev/null
+  pkgutil --expand "$WORK/out.pkg" "$WORK/x"
+  mkdir -p "$WORK/t"; (cd "$WORK/t" && gzip -dc "$WORK/x/mavericks-1password-component.pkg/Payload" | cpio -id --quiet)
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :generated:0' "$WORK/t/usr/local/mavergreen/1password/mavergreen.plist")" = "Applications/Linux 1Password.app" ]
+  [ -z "$(/usr/libexec/PlistBuddy -c 'Print :appcast' "$WORK/t/usr/local/mavergreen/1password/mavergreen.plist")" ]
+}
+
+@test "preinstall refuses a volume without Porthole, naming it" {
+  mkdir -p "$WORK/v/usr/local/mavergreen/container-tools"; : > "$WORK/v/usr/local/mavergreen/container-tools/mavergreen.plist"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"needs Porthole installed"* ]] || false
 }
 
-@test "postinstall invokes porthole materialize on the installed conf" {
-  grep -q 'materialize' "$REPO/packaging/macos/scripts/postinstall"
-  grep -q '/Library/Application Support/Mavergreen/Porthole/presets/1password.conf' "$REPO/packaging/macos/scripts/postinstall"
+@test "preinstall refuses a volume without Container Tools, naming it" {
+  mkdir -p "$WORK/v/usr/local/mavergreen/porthole"; : > "$WORK/v/usr/local/mavergreen/porthole/mavergreen.plist"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"needs Container Tools for Mavericks"* ]] || false
+}
+
+@test "preinstall accepts a volume with both, and reads only that volume" {
+  for p in porthole container-tools; do mkdir -p "$WORK/v/usr/local/mavergreen/$p"; : > "$WORK/v/usr/local/mavergreen/$p/mavergreen.plist"; done
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "postinstall materializes the preset from its tree with the target volume's engine" {
+  e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
+  printf '#!/bin/sh\necho "$@" > "%s/args"\n' "$WORK" > "$e/porthole"; chmod +x "$e/porthole"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/postinstall-hook.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$WORK/args")" = "materialize $WORK/v/usr/local/mavergreen/1password/share/porthole/presets/1password.conf --apps-dir $WORK/v/Applications" ]
+}
+
+@test "on another volume, both hooks succeed without touching the running system" {
+  for p in porthole container-tools; do mkdir -p "$WORK/v/usr/local/mavergreen/$p"; : > "$WORK/v/usr/local/mavergreen/$p/mavergreen.plist"; done
+  e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
+  printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"
+  mkdir -p "$WORK/stubs"; : > "$WORK/log"
+  for t in launchctl open kextstat kextload kextunload killall pkill osascript sudo docker docker-machine porthole op; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/log"\n' "$t" "$WORK" > "$WORK/stubs/$t"; chmod +x "$WORK/stubs/$t"
+  done
+  for h in preinstall-hook.sh postinstall-hook.sh; do
+    run env PATH="$WORK/stubs:/usr/bin:/bin" ROOT="$WORK/v" sh "$REPO/packaging/macos/$h"
+    [ "$status" -eq 0 ] || { echo "$h: $output"; return 1; }
+  done
+  [ ! -s "$WORK/log" ] || { cat "$WORK/log"; return 1; }
 }
 
 @test "materialize turns the conf into Linux 1Password.app with a menu bar" {
