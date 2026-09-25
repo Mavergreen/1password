@@ -98,9 +98,8 @@ ensure_config_dir() {
   [ -w "$ONEP_CONFIG_DIR" ] || die "cannot write to $ONEP_CONFIG_DIR -- wrong owner? (a sudo'd run creates it as root; fix: sudo rm -rf $ONEP_CONFIG_DIR)"
 }
 
-# The real repo root of this script, resolving a /usr/local/mavergreen/bin or ~/bin symlink (and
-# relative/./bin/op invocation), so sibling assets (1password/, build-native/, bin/) are
-# found however op was invoked. $0 alone points at the symlink, not the real tree.
+# The real root of this script -- the product tree when installed, the checkout in development --
+# resolving a /usr/local/mavergreen/bin or ~/bin symlink. $0 alone points at the symlink.
 gui_root() {
   _s=$0
   case $_s in /*) ;; *) _s="$(cd "$(dirname "$_s")" && pwd)/$(basename "$_s")" ;; esac
