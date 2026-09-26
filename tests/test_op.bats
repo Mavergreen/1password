@@ -205,5 +205,5 @@ load test_helper
   run "$OP" gui
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   [ ! -f "$ONEP_CONFIG_DIR/lock-poll.pid" ]
-  ! grep -q 'lock_poll\|LOCK_STATE' "$OP"
+  ! grep -q 'lock_poll\|LOCK_STATE' "$OP" || return 1
 }
