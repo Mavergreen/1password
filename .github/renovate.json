@@ -1,4 +1,22 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>Mavergreen/shipyard"]
+  "extends": ["github>Mavergreen/shipyard"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track 1Password's stable Linux build into UPSTREAM_VERSION (the release name; the container floats to latest at first launch). 1Password publishes no release feed Renovate can read, but its apt repository -- the one 1password.conf's APT_REPO installs from -- indexes the current build.",
+      "managerFilePatterns": ["/^UPSTREAM_VERSION$/"],
+      "matchStrings": ["^(?<currentValue>.+?)\\s*$"],
+      "depNameTemplate": "1password",
+      "datasourceTemplate": "deb",
+      "registryUrlTemplate": "https://downloads.1password.com/linux/debian/amd64?suite=stable&components=main&binaryArch=amd64"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["1password"],
+      "matchDatasources": ["deb"],
+      "changelogUrl": "https://releases.1password.com/linux/stable/"
+    }
+  ]
 }
