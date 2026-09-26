@@ -20,7 +20,7 @@ install -m 0755 "$REPO/bin/op"              "$T/bin/op"
 SCR=$(mktemp -d "${TMPDIR:-/tmp}/1pm-scripts.XXXXXX")
 sh "$SHIPYARD/stage_product.sh" --stage "$ROOT" --product 1password --name "1Password for Mavericks" \
   --version "$VERSION" --generated "Applications/Linux 1Password.app" \
-  --preinstall-hook "$HERE/preinstall-hook.sh" --postinstall-hook "$HERE/postinstall-hook.sh" \
+  --requires porthole --postinstall-hook "$HERE/postinstall-hook.sh" \
   --scripts-out "$SCR"
 
 COMPONENT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/1pm-pkg.XXXXXX")

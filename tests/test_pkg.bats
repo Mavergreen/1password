@@ -39,18 +39,13 @@ teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
   [ -z "$(/usr/libexec/PlistBuddy -c 'Print :appcast' "$WORK/t/usr/local/mavergreen/1password/mavergreen.plist")" ]
 }
 
-@test "preinstall refuses a volume without Porthole, naming it" {
-  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"needs Porthole installed"* ]] || false
+@test "the package requires Porthole, through shipyard's generated check" {
+  grep -q -- '--requires porthole' "$REPO/packaging/macos/build_pkg.sh"
 }
 
-# Container Tools is Porthole's requirement (its installer checks it); a preset requires only Porthole,
-# like every other preset.
-@test "preinstall requires only Porthole, and reads only that volume" {
-  mkdir -p "$WORK/v/usr/local/mavergreen/porthole"; : > "$WORK/v/usr/local/mavergreen/porthole/mavergreen.plist"
-  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
-  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+@test "no hand-written requirement check is left to drift" {
+  [ ! -e "$REPO/packaging/macos/preinstall-hook.sh" ] || return 1
+  ! grep -q -- '--preinstall-hook' "$REPO/packaging/macos/build_pkg.sh" || return 1
 }
 
 @test "postinstall materializes the preset from its tree with the target volume's engine" {
@@ -61,15 +56,14 @@ teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
   [ "$(cat "$WORK/args")" = "materialize $WORK/v/usr/local/mavergreen/1password/share/porthole/presets/1password.conf --apps-dir $WORK/v/Applications" ]
 }
 
-@test "on another volume, both hooks succeed without touching the running system" {
-  for p in porthole container-tools; do mkdir -p "$WORK/v/usr/local/mavergreen/$p"; : > "$WORK/v/usr/local/mavergreen/$p/mavergreen.plist"; done
+@test "on another volume, the postinstall hook succeeds without touching the running system" {
   e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
   printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"
   mkdir -p "$WORK/stubs"; : > "$WORK/log"
   for t in launchctl open kextstat kextload kextunload killall pkill osascript sudo docker docker-machine porthole op; do
     printf '#!/bin/sh\necho "%s $*" >> "%s/log"\n' "$t" "$WORK" > "$WORK/stubs/$t"; chmod +x "$WORK/stubs/$t"
   done
-  for h in preinstall-hook.sh postinstall-hook.sh; do
+  for h in postinstall-hook.sh; do
     run env PATH="$WORK/stubs:/usr/bin:/bin" ROOT="$WORK/v" sh "$REPO/packaging/macos/$h"
     [ "$status" -eq 0 ] || { echo "$h: $output"; return 1; }
   done
