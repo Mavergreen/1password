@@ -1,0 +1,15 @@
+name: icons
+
+# spec: mavergreen-conventions SKILL.md, "App icons" -- "Porthole presets' vendor icons"
+
+on:
+  push:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * 1'
+
+jobs:
+  icons:
+    uses: Mavergreen/shipyard/.github/workflows/preset-icons.yml@v1
+    with:
+      conf: 1password.conf
