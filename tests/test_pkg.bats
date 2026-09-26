@@ -40,23 +40,17 @@ teardown() { [ -n "$WORK" ] && rm -rf "$WORK"; }
 }
 
 @test "preinstall refuses a volume without Porthole, naming it" {
-  mkdir -p "$WORK/v/usr/local/mavergreen/container-tools"; : > "$WORK/v/usr/local/mavergreen/container-tools/mavergreen.plist"
   run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
   [ "$status" -ne 0 ]
   [[ "$output" == *"needs Porthole installed"* ]] || false
 }
 
-@test "preinstall refuses a volume without Container Tools, naming it" {
+# Container Tools is Porthole's requirement (its installer checks it); a preset requires only Porthole,
+# like every other preset.
+@test "preinstall requires only Porthole, and reads only that volume" {
   mkdir -p "$WORK/v/usr/local/mavergreen/porthole"; : > "$WORK/v/usr/local/mavergreen/porthole/mavergreen.plist"
   run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"needs Container Tools for Mavericks"* ]] || false
-}
-
-@test "preinstall accepts a volume with both, and reads only that volume" {
-  for p in porthole container-tools; do mkdir -p "$WORK/v/usr/local/mavergreen/$p"; : > "$WORK/v/usr/local/mavergreen/$p/mavergreen.plist"; done
-  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/preinstall-hook.sh"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
 @test "postinstall materializes the preset from its tree with the target volume's engine" {
