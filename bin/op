@@ -49,16 +49,6 @@ LAUNCHD_PLIST="$LAUNCH_AGENTS_DIR/$LAUNCHD_LABEL.plist"
 WATCH_LAUNCHD_LABEL="dev.mavergreen.op-watch"
 WATCH_LAUNCHD_PLIST="$LAUNCH_AGENTS_DIR/$WATCH_LAUNCHD_LABEL.plist"
 WATCH_INTERVAL="${ONEP_WATCH_INTERVAL:-3}"
-# The Porthole xpra socket path, retained only to DERIVE the lock-state channel path below (the
-# materialized viewer computes the same path). op no longer bridges xpra itself -- the materialized
-# "Linux 1Password.app" launcher owns the xpra tunnel, viewer, and recovery.
-XPRA_SOCK="${ONEP_XPRA_SOCK:-${TMPDIR:-/tmp}/1password-xpra.sock}"
-# Lock-state channel: a background poller publishes "locked"/"unlocked" here (derived from
-# the xpra sock, so the Porthole viewer computes the same path) and the viewer polls it to
-# badge its menu-bar glyph with a padlock when locked.
-LOCK_STATE_FILE="${XPRA_SOCK%-xpra.sock}-lockstate"
-LOCK_POLL_PID="$ONEP_CONFIG_DIR/lock-poll.pid"
-LOCK_POLL_INTERVAL="${ONEP_LOCK_POLL_SECS:-2}"
 BROWSER_MANIFEST="${ONEP_BROWSER_MANIFEST:-$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/com.1password.1password.json}"
 BROWSER_EXT_ID="${ONEP_BROWSER_EXT_ID:-{d634138d-c276-4fc8-924b-40a0ea21d284}}"
 BROWSER_LAUNCHER="${ONEP_BROWSER_LAUNCHER:-$ONEP_CONFIG_DIR/op-browser-bridge}"
@@ -461,36 +451,9 @@ cmd_clip() {
 
 _vm_ip() { _ip=${DOCKER_HOST#tcp://}; printf '%s' "${_ip%%:*}"; }
 
-# --- lock-state poller -------------------------------------------------------
-# Publish 1Password's lock state to LOCK_STATE_FILE for the Porthole viewer's menu-bar
-# glyph. 1Password shows a "Lock Screen" window iff locked (op's own unlock check). Write
-# atomically (temp + mv) so a reader never sees a half-written file.
-lock_state_write_once() {
-  if docker exec -i -u 1000:0 -e DISPLAY=:100 "$CONTAINER" \
-       xdotool search --name "Lock Screen" >/dev/null 2>&1; then _st=locked; else _st=unlocked; fi
-  printf '%s\n' "$_st" > "$LOCK_STATE_FILE.tmp" 2>/dev/null \
-    && mv -f "$LOCK_STATE_FILE.tmp" "$LOCK_STATE_FILE" 2>/dev/null
-}
-lock_poll_running() { [ -f "$LOCK_POLL_PID" ] && ps -p "$(cat "$LOCK_POLL_PID")" >/dev/null 2>&1; }
-lock_poll_start() {
-  lock_poll_running && return 0
-  ensure_config_dir
-  # Detached (closes stdin + fd 3) so the poll loop never holds a caller's descriptors.
-  ( while :; do lock_state_write_once; sleep "$LOCK_POLL_INTERVAL"; done ) </dev/null >/dev/null 2>&1 3>&- &
-  echo $! > "$LOCK_POLL_PID"
-}
-lock_poll_stop() {
-  if [ -f "$LOCK_POLL_PID" ]; then
-    kill "$(cat "$LOCK_POLL_PID")" 2>/dev/null
-    rm -f "$LOCK_POLL_PID"
-  fi
-  rm -f "$LOCK_STATE_FILE"
-}
-
 cmd_gui() {
   load_docker_env
   if [ "${1:-}" = "stop" ]; then
-    lock_poll_stop
     # Quit the materialized viewer cleanly (on an intentional Quit its OWN recovery watcher stays
     # down, so it won't fight us), then stop the resident container.
     osascript -e "tell application \"$(basename "$(gui_app)" .app)\" to quit" >/dev/null 2>&1 || true
@@ -503,14 +466,11 @@ cmd_gui() {
   # (building it on first run), stands up the xpra tunnel + viewer, and nudges about staleness/xpra
   # if a rebuild is due. So `op gui` and the double-clicked app agree, and 1Password's viewer runs
   # alongside other viewers (Signal, ...) as itself. op no longer starts the container or nudges --
-  # the app/launcher owns all of that now; op just opens it (and polls lock state for the glyph).
+  # the app/launcher owns all of that now; op just opens it.
   _app="$(gui_app)"
   [ -d "$_app" ] || die "$_app not found -- reinstall the 1Password preset (its postinstall materializes it)"
   open "$_app" || die "could not open $_app"
   printf '1Password GUI: opened %s\n' "$_app"
-  # Publish 1Password's lock state (shared $TMPDIR/1password-lockstate, derived from the same sock
-  # path the materialized viewer uses -- SLUG=1password) so the viewer badges its menu-bar glyph.
-  if [ -z "${ONEP_NO_LOCK_POLL:-}" ]; then lock_poll_start; fi
 }
 
 cmd_copy() {

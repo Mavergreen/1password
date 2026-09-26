@@ -198,3 +198,12 @@ load test_helper
 # (Retired: "setup resolves the container build dir via ./bin/op" -- op setup no longer builds a
 # container; it delegates to `porthole up`. gui_root's symlink/relative-path resolution is still
 # covered by the gui_recover_watch test above.)
+
+# The viewer shows 1Password's own tray icon (locked/unlocked art) and reads its window titles for the
+# tray menu, so op no longer runs a background poller to feed it.
+@test "op gui only opens the app: it leaves no background poller behind" {
+  run "$OP" gui
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [ ! -f "$ONEP_CONFIG_DIR/lock-poll.pid" ]
+  ! grep -q 'lock_poll\|LOCK_STATE' "$OP"
+}
