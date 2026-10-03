@@ -1,0 +1,5 @@
+#!/bin/sh
+# platform: macOS-only -- Momiji and PowerFox run it as the 1Password extension's native-messaging host
+# The package's NativeMessagingHosts manifest names this file. Browsers start it with a bare PATH,
+# so it runs the op beside it in this product's tree, handing over the browser's arguments.
+exec "$(dirname "$0")/../bin/op" _browser-bridge "$@"

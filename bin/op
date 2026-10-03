@@ -49,9 +49,6 @@ LAUNCHD_PLIST="$LAUNCH_AGENTS_DIR/$LAUNCHD_LABEL.plist"
 WATCH_LAUNCHD_LABEL="dev.mavergreen.op-watch"
 WATCH_LAUNCHD_PLIST="$LAUNCH_AGENTS_DIR/$WATCH_LAUNCHD_LABEL.plist"
 WATCH_INTERVAL="${ONEP_WATCH_INTERVAL:-3}"
-BROWSER_MANIFEST="${ONEP_BROWSER_MANIFEST:-$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/com.1password.1password.json}"
-BROWSER_EXT_ID="${ONEP_BROWSER_EXT_ID:-{d634138d-c276-4fc8-924b-40a0ea21d284}}"
-BROWSER_LAUNCHER="${ONEP_BROWSER_LAUNCHER:-$ONEP_CONFIG_DIR/op-browser-bridge}"
 
 die() { printf 'op: %s\n' "$1" >&2; exit "${2:-1}"; }
 
@@ -72,7 +69,6 @@ usage: op <command> [arguments]
                  (gui stop: shut down)
   ssh-agent ...  use 1Password's SSH agent from the Mac (start|stop|status|
                  install-launchd|uninstall-launchd)
-  browser connect|disconnect   wire Momiji's or PowerFox's 1Password extension to the app
   op <args>      explicit pass-through (if a real op command ever
                  shadows a name above)
 
@@ -660,7 +656,8 @@ browser_bridge_cmd() {
   printf 'docker exec -i -u 1000:0 -e HOME=%s -e XDG_RUNTIME_DIR=%s %s socat STDIO EXEC:/opt/1Password/1Password-BrowserSupport' "$APP_HOME" "$APP_XDG_RUNTIME" "$CONTAINER"
 }
 
-# Invoked by the browser (Momiji, PowerFox) as its native-messaging host; a transparent byte pipe.
+# Invoked by the browser (Momiji, PowerFox) through the package's libexec/op-browser-bridge, which
+# its machine-wide native-messaging manifest names; a transparent byte pipe.
 # Firefox passes the manifest path then the extension id; the helper needs
 # the extension id as its argv, so forward the last argument.
 browser_bridge_run() {
@@ -673,41 +670,6 @@ browser_bridge_run() {
 
 cmd_browser_bridge() {
   browser_bridge_run "$@"
-}
-
-browser_manifest_json() {
-  cat <<JSON
-{
-  "name": "com.1password.1password",
-  "description": "1Password BrowserSupport (via op)",
-  "path": "$BROWSER_LAUNCHER",
-  "type": "stdio",
-  "allowed_extensions": ["$BROWSER_EXT_ID"]
-}
-JSON
-}
-
-cmd_browser() {
-  case ${1:-} in
-    connect)
-      ensure_config_dir
-      # Found by name when the browser runs it, never by where this op happens to live: a recorded
-      # path goes stale when a checkout moves. Browsers start native hosts without
-      # /usr/local/mavergreen/bin, through which op is on the path.
-      printf '#!/bin/sh\n# Written by `op browser connect`.\nPATH="$PATH:/usr/local/mavergreen/bin"; export PATH\nexec op _browser-bridge "$@"\n' \
-        > "$BROWSER_LAUNCHER"
-      chmod 755 "$BROWSER_LAUNCHER"
-      mkdir -p "$(dirname "$BROWSER_MANIFEST")"
-      browser_manifest_json > "$BROWSER_MANIFEST"
-      printf 'Wrote %s\nNow restart Momiji or PowerFox, then open the 1Password extension --\n' "$BROWSER_MANIFEST"
-      printf 'it should show "connected to 1Password for Linux".\n'
-      ;;
-    disconnect)
-      rm -f "$BROWSER_MANIFEST"
-      printf 'Removed %s (restart the browser to fully disconnect).\n' "$BROWSER_MANIFEST"
-      ;;
-    *) die "usage: op browser connect|disconnect" 2 ;;
-  esac
 }
 
 main() {
@@ -725,9 +687,6 @@ main() {
     gui)     cmd_gui "$@" ;;
     ssh-agent) cmd_ssh_agent "$@" ;;
     _browser-bridge) cmd_browser_bridge "$@" ;;
-    browser) cmd_browser "$@" ;;
-    browser-connect) cmd_browser connect ;;
-    browser-disconnect) cmd_browser disconnect ;;
     op)      op_run "$@" ;;
     help|-h|--help) usage ;;
     *) op_run "$_cmd" "$@" ;;   # anything else goes straight to op

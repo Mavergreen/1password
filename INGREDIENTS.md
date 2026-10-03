@@ -14,3 +14,7 @@ The container is `UPDATE=float` (see `1password.conf`): 1Password self-gates on 
 version, so pinning is pointless -- it installs current at first launch. `UPSTREAM_VERSION` names the
 release for the 1Password version current when it is cut; bump it by hand when 1Password ships an update
 you want to name a release for.
+
+## Conformance deviations
+
+- install-path:Library/Application*/Mozilla/NativeMessagingHosts/com.1password.1password.json: Momiji and PowerFox find a native-messaging host only by a manifest in `Library/Application Support/Mozilla/NativeMessagingHosts/`, a place Firefox dictates, so the pkg installs `com.1password.1password.json` there for the 1Password extension. The manifest names the bridge in this product's tree, `usr/local/mavergreen/1password/libexec/op-browser-bridge`, and is listed in the manifest's `outside`, so uninstall removes it.
