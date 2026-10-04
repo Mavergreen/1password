@@ -88,7 +88,16 @@ jobs:
       - name: Run the repo's tests
         run: sh "$SHIPYARD_SCRIPTS/run-repo-tests.sh"
 
-      - name: Build the preset .pkg (conf + menu manifest + op CLI)
+      # The updater carries the release's version, which Sparkle compares with the feed's. x86_64 for
+      # 10.9 only, like Porthole's: this preset installs only where Porthole does.
+      - name: Build the Sparkle updater (x86_64 / min-10.9)
+        run: |
+          set -eu
+          app="$(basename "$(sh "$SHIPYARD_SCRIPTS/product-name.sh" updater-app 1password)")"
+          sh build/build-updater.sh "${{ steps.ver.outputs.version }}" "$RUNNER_TEMP/$app"
+          echo "UPD_APP=$RUNNER_TEMP/$app" >> "$GITHUB_ENV"
+
+      - name: Build the preset .pkg (conf + menu manifest + op CLI + updater)
         run: |
           set -eu
           sh packaging/macos/build_pkg.sh "${{ steps.ver.outputs.version }}" \
@@ -102,12 +111,38 @@ jobs:
             --tag "${{ steps.ver.outputs.version }}" --version "${{ steps.ver.outputs.version }}" \
             --product 'Linux 1Password' --min-os 10.9.5 --out "$ONEP_DIST_DIR/RELEASE_NOTES.md"
 
-      # Conformance: does the pkg we are about to publish carry the family's identity, install paths,
-      # floor and version scheme (INGREDIENTS.md "Conformance deviations" excuses the rest)?
-      - name: Artifact conformance
+      - name: Sign the pkg and write the feed
+        if: steps.ver.outputs.publish == 'true'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}   # sign_and_appcast.sh fetches ed25519-sign via `gh`
+          VER: ${{ steps.ver.outputs.version }}
         run: |
-          sh "$SHIPYARD_SCRIPTS/artifact-facts.sh" "$ONEP_DIST_DIR" "${{ steps.ver.outputs.version }}" \
+          set -eu
+          # printenv, not [ -n "$SPARKLE_PRIVATE_KEY" ]: the shell never expands the key, so no trace can print it
+          printenv SPARKLE_PRIVATE_KEY | grep -q . || { echo "::error::SPARKLE_PRIVATE_KEY secret not set"; exit 1; }
+          PKG="$ONEP_DIST_DIR/mavericks-1password-$VER.pkg"
+          sh "$SHIPYARD_SCRIPTS/sign_and_appcast.sh" --product 1password --feed-dir "$ONEP_DIST_DIR" \
+            --channel-title "1Password for Mavericks" --version "$VER" \
+            --pkg-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/$VER/$(basename "$PKG")" \
+            --notes-file "$ONEP_DIST_DIR/RELEASE_NOTES.md" --pkg "$PKG" --min-os 10.9.5
+
+      # Conformance: does the pkg we are about to publish carry the family's identity, install paths,
+      # floor and version scheme (INGREDIENTS.md "Conformance deviations" excuses the rest)? A run that
+      # doesn't publish has no signed feed, so it checks against an unsigned stand-in.
+      - name: Artifact conformance
+        env:
+          PUB: ${{ steps.ver.outputs.publish }}
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          set -eu
+          [ "$PUB" = true ] || sh "$SHIPYARD_SCRIPTS/stand-in-feeds.sh" "$ONEP_DIST_DIR" "$VER"
+          sh "$SHIPYARD_SCRIPTS/artifact-facts.sh" "$ONEP_DIST_DIR" "$VER" \
             | sh "$SHIPYARD_SCRIPTS/check-artifact-conformance.sh"
+
+      - name: Assert the feed upgrades installed clients
+        if: steps.ver.outputs.publish == 'true'
+        run: sh "$SHIPYARD_SCRIPTS/assert_appcast_upgradeable.sh" --appcast "$ONEP_DIST_DIR/1password.xml" --version "${{ steps.ver.outputs.version }}"
 
       - name: The build must not have written into the source tree
         run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh"
@@ -117,8 +152,22 @@ jobs:
           name: onepassword
           path: ${{ env.ONEP_DIST_DIR }}/*
 
+  # Before anything is published: no log of this run, and no file about to be released, carries a
+  # piece of the signing key. publish-release.yml looks for this job's record on any signed release.
+  scan:
+    needs: [build]
+    if: always() && (needs.build.outputs.publish == 'true')   # a build that fails after signing left logs too; scan them
+    permissions:
+      actions: read     # this run's job logs
+      contents: read
+    uses: Mavergreen/shipyard/.github/workflows/scan-for-key.yml@v1
+    with:
+      artifact: onepassword
+    secrets:
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+
   publish:
-    needs: build
+    needs: [build, scan]
     if: needs.build.outputs.publish == 'true'
     permissions:
       contents: write

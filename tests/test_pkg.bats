@@ -132,3 +132,31 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
   mkdir -p "$WORK/t"; (cd "$WORK/t" && gzip -dc "$WORK/x/mavericks-1password-component.pkg/Payload" | cpio -id --quiet)
   [ "$(tail -n 1 "$WORK/t/usr/local/mavergreen/1password/share/porthole/presets/1password.conf")" = APP_VERSION=0.0.0 ]
 }
+
+# A stand-in for the updater mavericks_add_updater_app builds: the identity and feed shipyard's registry
+# gives 1password, which stage_product.sh checks.
+stub_updater() {
+  u="$WORK/1password-updater.app"; mkdir -p "$u/Contents/MacOS"
+  printf '#!/bin/sh\n' > "$u/Contents/MacOS/1password-updater"; chmod +x "$u/Contents/MacOS/1password-updater"
+  /usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string dev.mavergreen.1password.updater' \
+    -c 'Add :CFBundleExecutable string 1password-updater' \
+    -c 'Add :SUFeedURL string https://github.com/Mavergreen/1password/releases/latest/download/1password.xml' \
+    "$u/Contents/Info.plist" >/dev/null
+  printf '%s' "$u"
+}
+
+# Releases reach an installed preset the way Porthole's do: a daily check, then an offer to install.
+@test "with UPD_APP, the pkg carries 1password's updater and its daily check" {
+  run env UPD_APP="$(stub_updater)" sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  pkgutil --expand "$WORK/out.pkg" "$WORK/x"
+  files="$(lsbom -s "$WORK/x/mavericks-1password-component.pkg/Bom")"
+  echo "$files" | grep -q 'Library/Application Support/Mavergreen/1password-updater.app/Contents/Info.plist$' || { echo "$files"; return 1; }
+  echo "$files" | grep -q 'updatecheck.plist$' || { echo "$files"; return 1; }
+}
+
+@test "UPD_APP naming no updater fails the build" {
+  run env UPD_APP="$WORK/nothing-here.app" sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg"
+  [ "$status" -ne 0 ] || return 1
+  [[ "$output" == *"no updater .app"* ]] || false
+}
