@@ -123,3 +123,12 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
   grep -q 'exec "$_bin" "$XPRA_SOCK"' "$WORK/apps/Linux 1Password.app/Contents/Resources/bin/1password" || return 1
   [ "$(cat "$WORK/apps/Linux 1Password.app/Contents/Resources/AppIcon.width")" = 0 ]   # no cache: the penguin
 }
+
+# The release's version goes into the installed conf, so each release changes the app's recipe and
+# its install rebuilds the Linux app with the newest package.
+@test "the installed conf names the release's version" {
+  sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg" >/dev/null
+  pkgutil --expand "$WORK/out.pkg" "$WORK/x"
+  mkdir -p "$WORK/t"; (cd "$WORK/t" && gzip -dc "$WORK/x/mavericks-1password-component.pkg/Payload" | cpio -id --quiet)
+  [ "$(tail -n 1 "$WORK/t/usr/local/mavergreen/1password/share/porthole/presets/1password.conf")" = APP_VERSION=0.0.0 ]
+}

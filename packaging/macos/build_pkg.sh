@@ -15,6 +15,8 @@ ROOT=$(mktemp -d "${TMPDIR:-/tmp}/1pm-preset.XXXXXX")
 T="$ROOT/usr/local/mavergreen/1password"
 install -d "$T/bin" "$T/libexec" "$T/share/porthole/presets"
 install -m 0644 "$REPO/1password.conf"      "$T/share/porthole/presets/1password.conf"
+# The release's version is part of the app's recipe: installing a release rebuilds the Linux app.
+printf 'APP_VERSION=%s\n' "$VERSION" >> "$T/share/porthole/presets/1password.conf"
 install -m 0644 "$REPO/1password.menu.json" "$T/share/porthole/presets/1password.menu.json"
 install -m 0755 "$REPO/bin/op"              "$T/bin/op"
 install -m 0755 "$HERE/op-browser-bridge"   "$T/libexec/op-browser-bridge"
