@@ -1,20 +1,21 @@
-# mavericks-1password
+# 1Password 8 for Mavericks
 
-A [Porthole](https://github.com/Mavergreen/porthole) **preset** that runs 1Password on OS X 10.9
-(Mavericks): a native-feeling "Linux 1Password.app" plus the `op` CLI.
+Linux 1Password 8 as a Mac OS X 10.9 Mavericks app.
 
-This repo is not a viewer build -- it ships a parameter set (`1password.conf` + `1password.menu.json`)
-and the hand-written `bin/op` CLI. Install Porthole once, then install this preset's `.pkg`:
+(1Password 8 for Mac requires macOS 12 Monterey or later.)
 
-- its postinstall runs `porthole materialize`, which renders the 1Password container recipe + launcher
-  and drops **Linux 1Password.app** into `/Applications` (with its native menu bar); `sudo mavergreen
-  uninstall 1password` removes that app along with the rest of the product;
-- it installs `op` into `/usr/local/mavergreen/1password`, on the path through `/usr/local/mavergreen/bin`
-  -- item management, `op gui`, lock/unlock, the 1Password SSH agent, and browser wiring. `op`
-  resolves the shared `/Applications/Porthole.app` engine and the materialized container recipe at
-  runtime.
+## Usage
 
-- **Prerequisites:** Porthole and Container Tools for Mavericks (both enforced by `preinstall`).
-- **Version:** `<1password-version>-mavericks.N`. 1Password has no public version feed, so
-  `UPSTREAM_VERSION` is hand-bumped; the container floats to the latest 1Password at first launch
-  (`UPDATE=float`, since 1Password self-gates server-side).
+1. Install
+   [Porthole](https://github.com/Mavergreen/porthole)
+2. Install this
+3. Open `/Applications/Linux 1Password.app`
+
+## Also included
+
+Upstream's Firefox plugin already works in Momiji and PowerFox.
+
+- Shared lock state with the Firefox plugin
+- the `op` CLI (also shares lock state)
+- the SSH agent
+- Quick Access
