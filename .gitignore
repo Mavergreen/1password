@@ -17,3 +17,5 @@ build-*/
 # Default build root is $MAVERICKS_BUILD_ROOT (outside the tree); this is only the deliberate-in-tree
 # escape hatch (MAVERICKS_BUILD_ROOT="$PWD" sh packaging/macos/build_pkg.sh ...).
 /onep-build/
+/.superpowers/
+/.idea/
