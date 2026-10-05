@@ -86,3 +86,11 @@ teardown() { rm -rf "$GEN"; }
   grep -q "CAPS='SYS_PTRACE'" "$spec" || return 1
   ! grep -q "cli-config" "$spec" || return 1   # the CLI signs in through the app, not on its own
 }
+
+# 1Password's own About is Settings -> About: a settings link handed to the running app opens it.
+# The launcher's --about (the Mac About menu item) runs that, so About never shows a generic panel.
+@test "About opens 1Password's own Settings -> About through its settings link" {
+  L="$GEN/bin/1password"
+  grep -q -- '--about' "$L" || return 1
+  grep -qF "sh -c '/opt/1Password/1password --user-data-dir=/home/onepassword/.config/1Password onepassword://settings/about'" "$L" || { grep -n about "$L"; return 1; }
+}
