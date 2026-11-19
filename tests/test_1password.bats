@@ -43,8 +43,8 @@ teardown() { rm -rf "$GEN"; }
   grep -q 'useradd -m -u 1000 -g onepassword onepassword' "$DF" || return 1
 }
 
-@test "1Password Dockerfile installs the op-CLI support packages (socat is in the base)" {
-  grep -qE 'xdotool wmctrl x11-utils' "$DF" || return 1   # socat moved to the shared base
+@test "1Password Dockerfile installs the op-CLI support packages" {
+  grep -qE 'xdotool wmctrl x11-utils' "$DF" || return 1
 }
 
 @test "1Password Dockerfile writes the browser-support allowlist (EXTRA_SETUP)" {

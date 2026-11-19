@@ -2,5 +2,7 @@
 # platform: host-agnostic
 printf 'ps %s\n' "$*" >> "$STUB_LOG"
 # a recorded agent is "alive" only when the test created agent.alive
-[ -f "$STUB_DIR/agent.alive" ] && exit 0
-exit 1
+[ -f "$STUB_DIR/agent.alive" ] || exit 1
+# `ps -o command= -p PID`: the recorded agent's argv, from agent.command when the test wrote one
+case "$*" in *command=*) cat "$STUB_DIR/agent.command" 2>/dev/null ;; esac
+exit 0

@@ -22,6 +22,7 @@ load test_helper
 @test "ssh-agent start is idempotent" {
   echo 'true' > "$STUB_DIR/docker.stdout"
   touch "$STUB_DIR/agent.alive"
+  echo 's6-ipcserverd -- docker exec -i 1password-gui s6-ipcclient /home/onepassword/.1password/agent.sock s6-ioconnect' > "$STUB_DIR/agent.command"
   mkdir -p "$ONEP_CONFIG_DIR"
   echo 4242 > "$ONEP_CONFIG_DIR/ssh-agent.pid"
   run "$OP" ssh-agent start
@@ -29,6 +30,31 @@ load test_helper
   log="$(cat "$STUB_LOG")"
   [[ "$log" != *"s6-ipcserver"* ]] || return 1
   [[ "$output" == *"already running"* ]] || return 1
+}
+
+# An agent started before the s6 relay (socat) outlives an update and would fail every connection
+# into the new container, which has no socat: it is replaced, not reported as "already running".
+@test "ssh-agent start replaces a running agent that still relays with socat" {
+  echo 'true' > "$STUB_DIR/docker.stdout"
+  touch "$STUB_DIR/agent.alive"
+  echo 's6-ipcserverd -- docker exec -i 1password-gui socat STDIO UNIX-CONNECT:/home/onepassword/.1password/agent.sock' > "$STUB_DIR/agent.command"
+  mkdir -p "$ONEP_CONFIG_DIR"
+  echo 4242 > "$ONEP_CONFIG_DIR/ssh-agent.pid"
+  run "$OP" ssh-agent start
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$output" != *"already running"* ]] || return 1
+  grep -q 's6-ipcserver -a 0600 .*s6-ipcclient' "$STUB_LOG" || { cat "$STUB_LOG"; return 1; }
+}
+
+# A container from a Porthole base without s6 can't be relayed into: say so instead of starting a
+# listener whose every connection silently fails.
+@test "ssh-agent start refuses a container without the s6 relay and says to update Porthole" {
+  echo 'true' > "$STUB_DIR/docker.stdout"
+  touch "$STUB_DIR/no-s6"
+  run "$OP" ssh-agent start
+  [ "$status" -ne 0 ] || return 1
+  [[ "$output" == *"Porthole"* ]] || { echo "$output"; return 1; }
+  ! grep -q 's6-ipcserver -a 0600' "$STUB_LOG" || return 1
 }
 
 @test "ssh-agent start warns when remote socket absent" {

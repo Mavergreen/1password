@@ -11,6 +11,9 @@ if [ "${1:-}" = context ] && [ "${2:-}" = inspect ]; then
   [ -f "$STUB_DIR/docker-context.${3:-}" ] && exit 0
   exit 1
 fi
+# The s6-relay presence probe: fails only when the test says the container lacks s6
+# ($STUB_DIR/no-s6). Does not consume a numbered replay slot.
+case "$*" in *"command -v s6-ipcclient"*) [ -f "$STUB_DIR/no-s6" ] && exit 1; exit 0 ;; esac
 _n=$(cat "$STUB_DIR/docker.calls" 2>/dev/null || echo 0)
 _n=$((_n + 1))
 echo "$_n" > "$STUB_DIR/docker.calls"

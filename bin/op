@@ -527,12 +527,20 @@ ssh_agent_start() {
   { [ -n "$_ipc" ] && [ -x "$_ipc" ]; } \
     || die "the Porthole transport (s6-ipcserver) is missing -- reinstall Porthole"
   if ssh_agent_running; then
-    printf 'op ssh-agent already running (%s).\n' "$SSH_AGENT_SOCK"
-    printf 'export SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
-    return 0
+    # Reuse it only if it relays the way this op would (s6-ipcclient). One started before the s6
+    # relay (socat) outlives an update, and every connection into the new container would fail.
+    if ps -o command= -p "$(cat "$SSH_AGENT_PID")" 2>/dev/null | grep -q s6-ipcclient; then
+      printf 'op ssh-agent already running (%s).\n' "$SSH_AGENT_SOCK"
+      printf 'export SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
+      return 0
+    fi
+    kill "$(cat "$SSH_AGENT_PID")" 2>/dev/null
+    rm -f "$SSH_AGENT_PID"
   fi
   ssh_agent_remote_socket_present \
     || die "the app's SSH agent socket isn't there yet; enable Settings -> Developer -> Use the SSH agent in the app (op gui)"
+  docker exec "$CONTAINER" sh -c 'command -v s6-ipcclient && command -v s6-ioconnect' >/dev/null 2>&1 \
+    || die "the app's container has no s6 relay (it was built on an older Porthole base); update Porthole, then relaunch Linux 1Password"
   ensure_config_dir
   rm -f "$SSH_AGENT_SOCK"
   mkdir -p "$(dirname "$SSH_AGENT_SOCK")"
