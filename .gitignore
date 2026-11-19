@@ -1,4 +1,3 @@
-docs/
 *.pkg
 .*.swp
 # CMake/build OUTPUT dirs only -- NOT build/ (that holds the committed version wrappers).
