@@ -11,8 +11,10 @@ load test_helper
   log="$(cat "$STUB_LOG")"
   # Mac-side transport is s6-ipcserver, owner-only; no socat UNIX-LISTEN / escaped-colon hack.
   [[ "$log" == *"s6-ipcserver -a 0600 "* ]] || return 1
-  # It runs the container-side socat bridge as plain argv (the container's own socat, no backslash).
-  [[ "$log" == *"docker exec -i 1password-gui socat STDIO UNIX-CONNECT:/home/onepassword/.1password/agent.sock"* ]] || return 1
+  # The container side is s6-ipcclient (connects the app's agent socket) + s6-ioconnect (relays it),
+  # from the Porthole base image -- never socat.
+  [[ "$log" == *"docker exec -i 1password-gui s6-ipcclient /home/onepassword/.1password/agent.sock s6-ioconnect"* ]] || return 1
+  [[ "$log" != *socat* ]] || return 1
   [[ "$log" != *"UNIX-LISTEN"* ]] || return 1
   [[ "$output" == *"export SSH_AUTH_SOCK="* ]] || return 1
 }

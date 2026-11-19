@@ -539,16 +539,17 @@ ssh_agent_start() {
   _ipcdir=$(dirname "$_ipc")
   # s6-ipcserver binds $SSH_AGENT_SOCK owner-only (-a 0600, preserving the old socat mode=600), forks
   # per connection, and runs the child with the connection on stdin/stdout; docker exec pipes it to
-  # the container's socat, which connects the app's SSH agent socket. Its dir goes on PATH so the
+  # the container's s6-ipcclient, which connects the app's SSH agent socket, and s6-ioconnect, which
+  # relays it (both from the Porthole base image). Its dir goes on PATH so the
   # chain-loaded components (s6-ipcserver-socketbinder, s6-ipcserverd) resolve.
   if [ "$_foreground" -eq 1 ]; then
     PATH="$_ipcdir:$PATH"; export PATH
     echo $$ > "$SSH_AGENT_PID"   # exec keeps this pid
     exec "$_ipc" -a 0600 "$SSH_AGENT_SOCK" \
-      docker exec -i "$CONTAINER" socat STDIO UNIX-CONNECT:"$SSH_REMOTE_SOCK"
+      docker exec -i "$CONTAINER" s6-ipcclient "$SSH_REMOTE_SOCK" s6-ioconnect
   fi
   PATH="$_ipcdir:$PATH" "$_ipc" -a 0600 "$SSH_AGENT_SOCK" \
-    docker exec -i "$CONTAINER" socat STDIO UNIX-CONNECT:"$SSH_REMOTE_SOCK" &
+    docker exec -i "$CONTAINER" s6-ipcclient "$SSH_REMOTE_SOCK" s6-ioconnect &
   echo $! > "$SSH_AGENT_PID"
   printf 'op ssh-agent started.\nexport SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
 }
