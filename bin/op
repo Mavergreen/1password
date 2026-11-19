@@ -1,7 +1,6 @@
 #!/bin/sh
 # platform: macOS-only -- installs LaunchAgents with launchctl and runs the Mac's Porthole app
 # op -- Docker-backed 1Password CLI on OS X Mavericks, via the Linux `op` CLI in Docker.
-# Design: docs/superpowers/specs/2026-07-07-mavericks-1password-design.md
 set -u
 
 # The docker CLI and Container Tools' commands are on the path through /usr/local/mavergreen/bin.
