@@ -125,6 +125,18 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
   [ "$(cat "$WORK/v/etc/1password/custom_allowed_browsers")" = "Vivaldi.app" ]
 }
 
+@test "a template that can't be installed only warns: the app is still materialized" {
+  e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
+  printf '#!/bin/sh\necho "$1" >> "%s/args"\n' "$WORK" > "$e/porthole"; chmod +x "$e/porthole"
+  t="$WORK/v/usr/local/mavergreen/1password/share/1password"; mkdir -p "$t"
+  printf '# template\n' > "$t/custom_allowed_browsers"; chmod 000 "$t/custom_allowed_browsers"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/postinstall-hook.sh"
+  chmod 644 "$t/custom_allowed_browsers"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  grep -qx materialize "$WORK/args"
+  [[ "$output" == *"custom_allowed_browsers"* ]] || { echo "$output"; return 1; }
+}
+
 @test "on another volume, the postinstall hook succeeds without touching the running system" {
   e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
   printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"

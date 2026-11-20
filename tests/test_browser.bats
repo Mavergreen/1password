@@ -17,7 +17,7 @@ load test_helper
   run "$OP" _browser-bridge '{id}' </dev/null
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   grep -q '^docker exec -i -u 0 1password-gui sh -c ' "$STUB_LOG" || { cat "$STUB_LOG"; return 1; }
-  grep -q 'mv -f /etc/1password/custom_allowed_browsers.new /etc/1password/custom_allowed_browsers$' "$STUB_LOG"
+  grep -q 'mv -f "$t" /etc/1password/custom_allowed_browsers$' "$STUB_LOG"
   # written before the helper starts
   w=$(grep -n '^docker exec -i -u 0 ' "$STUB_LOG" | head -1 | cut -d: -f1)
   r=$(grep -n '^porthole-standin-run' "$STUB_LOG" | cut -d: -f1)
@@ -64,6 +64,44 @@ load test_helper
   ONEP_S6_IPCSERVER="$BATS_TEST_TMPDIR/engine/s6-ipcserver" run "$OP" _browser-bridge '{id}' </dev/null
   [ "$status" -ne 0 ] || return 1
   [[ "$output" == *"porthole-standin-run"*"reinstall Porthole"* ]] || { echo "$output"; return 1; }
+}
+
+@test "two browsers connecting at once both write the allowlist" {
+  run "$OP" _browser-bridge '{id}' </dev/null
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  d="$BATS_TEST_TMPDIR/etc1p"; mkdir -p "$d"
+  sed "s#/etc/1password#$d#g" "$STUB_DIR/allowlist.sh" > "$BATS_TEST_TMPDIR/w.sh"
+  i=0; : > "$BATS_TEST_TMPDIR/fails"
+  while [ $i -lt 30 ]; do
+    (yes A.app | head -2000 | sh "$BATS_TEST_TMPDIR/w.sh" 2>/dev/null || echo f >> "$BATS_TEST_TMPDIR/fails") &
+    (yes B.app | head -2000 | sh "$BATS_TEST_TMPDIR/w.sh" 2>/dev/null || echo f >> "$BATS_TEST_TMPDIR/fails") &
+    wait; i=$((i + 1))
+  done
+  [ ! -s "$BATS_TEST_TMPDIR/fails" ] || { echo "$(wc -l < "$BATS_TEST_TMPDIR/fails") writes failed"; return 1; }
+  [ "$(wc -l < "$d/custom_allowed_browsers")" -eq 2000 ]
+}
+
+@test "the trust check is of the file read, not a symlink to it" {
+  f="$BATS_TEST_TMPDIR/allowed"; printf 'Evil.app\n' > "$f"
+  # a root-owned link (what plain stat sees) to a user-writable file (what stat -L sees)
+  mkdir -p "$BATS_TEST_TMPDIR/s"
+  printf '#!/bin/sh\ncase "$1" in -L) echo "501 666" ;; *) echo "0 755" ;; esac\n' > "$BATS_TEST_TMPDIR/s/stat"
+  chmod +x "$BATS_TEST_TMPDIR/s/stat"
+  PATH="$BATS_TEST_TMPDIR/s:$PATH" ONEP_MAC_BROWSER_ALLOWLIST="$f" run "$OP" _browser-bridge '{id}' </dev/null
+  [ -f "$STUB_DIR/allowlist.in" ] || return 1
+  ! grep -q Evil.app "$STUB_DIR/allowlist.in"
+}
+
+@test "with no Porthole engine at all, nothing is run from the browser's working directory" {
+  b="$BATS_TEST_TMPDIR/nos6"; mkdir -p "$b"
+  for t in "${BATS_TEST_DIRNAME}"/stubs/*; do [ "${t##*/}" = s6-ipcserver ] || ln -s "$t" "$b/"; done
+  w="$BATS_TEST_TMPDIR/cwd"; mkdir -p "$w"
+  printf '#!/bin/sh\ntouch "%s/ran"\n' "$w" > "$w/porthole-standin-run"; chmod +x "$w/porthole-standin-run"
+  cd "$w"
+  PATH="$b:/usr/bin:/bin" ONEP_PORTHOLE_BIN=/nonexistent/porthole run "$OP" _browser-bridge '{id}' </dev/null
+  [ "$status" -ne 0 ] || return 1
+  [ ! -e "$w/ran" ] || return 1
+  [[ "$output" == *"reinstall Porthole"* ]] || { echo "$output"; return 1; }
 }
 
 @test "no socat is left in op or the preset (outside comments)" {

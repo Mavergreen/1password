@@ -678,8 +678,9 @@ browser_allowlist() {
   for _b in $BROWSERS_PRESEEDED; do printf '%s\n' "$_b"; done
   _f=$(mac_browser_allowlist)
   [ -f "$_f" ] || return 0
+  # -L: the file read, never a symlink to it.
   # shellcheck disable=SC2046
-  set -- $(stat -f '%u %Lp' "$_f" 2>/dev/null)
+  set -- $(stat -L -f '%u %Lp' "$_f" 2>/dev/null)
   _perm=${2:-777}
   if [ "${1:-}" != 0 ] || [ $(( 0$_perm & 022 )) -ne 0 ]; then
     echo "op: ignoring $_f: it must be owned by root and writable only by root (sudo chown root:wheel, chmod 644)" >&2
@@ -697,13 +698,17 @@ browser_bridge_run() {
   load_docker_env
   _extid=""
   for _a in "$@"; do _extid=$_a; done
-  _run="$(dirname "$(s6_ipcserver_bin)")/porthole-standin-run"
+  _ipc=$(s6_ipcserver_bin)
+  { [ -n "$_ipc" ] && [ -x "$_ipc" ]; } \
+    || die "the Porthole transport (s6-ipcserver) is missing -- reinstall Porthole"
+  _run="$(dirname "$_ipc")/porthole-standin-run"
   [ -x "$_run" ] || die "the Porthole stand-in tool porthole-standin-run is missing ($_run) -- reinstall Porthole"
   # Written as root, 0644 (1Password ignores the file otherwise), before every helper start, so an
-  # edit of the Mac file takes effect at the browser's next connection.
+  # edit of the Mac file takes effect at the browser's next connection. Each write has its own temp
+  # file ($$ is the container shell's), so browsers connecting at once never take each other's.
   browser_allowlist | docker exec -i -u 0 "$CONTAINER" sh -c 'umask 022 && mkdir -p /etc/1password &&
-    cat > /etc/1password/custom_allowed_browsers.new &&
-    mv -f /etc/1password/custom_allowed_browsers.new /etc/1password/custom_allowed_browsers' >&2 \
+    t=/etc/1password/.custom_allowed_browsers.$$ && cat > "$t" &&
+    mv -f "$t" /etc/1password/custom_allowed_browsers' >&2 \
     || die "could not write the browser allowlist in $CONTAINER"
   # Run as uid 1000 / gid 0 -- NOT the onepassword group -- so the helper's setgid actually changes
   # egid and its secure-mode (AT_SECURE) check passes.

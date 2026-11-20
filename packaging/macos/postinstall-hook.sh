@@ -4,7 +4,9 @@
 _allow="$ROOT/etc/1password/custom_allowed_browsers"
 _tmpl="$ROOT/usr/local/mavergreen/1password/share/1password/custom_allowed_browsers"
 if [ ! -e "$_allow" ] && [ -f "$_tmpl" ]; then
-  mkdir -p "$ROOT/etc/1password" && install -m 0644 "$_tmpl" "$_allow" || exit 1
+  # Comments only, so it allows nothing by itself: a failure is worth a note, not a failed install.
+  { mkdir -p "$ROOT/etc/1password" && install -m 0644 "$_tmpl" "$_allow"; } \
+    || echo "1password postinstall: could not install $_allow from $_tmpl; carrying on" >&2
 fi
 _porthole="$ROOT/Applications/Porthole.app/Contents/Resources/engine/bin/porthole"
 _conf="$ROOT/usr/local/mavergreen/1password/share/porthole/presets/1password.conf"
