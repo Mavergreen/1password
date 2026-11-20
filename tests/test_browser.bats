@@ -28,7 +28,7 @@ load test_helper
 
 @test "the browser's stdin goes only to the helper, never to the allowlist write" {
   printf 'native-message' | "$OP" _browser-bridge '{id}'
-  ! grep -q native-message "$STUB_DIR/allowlist.in"
+  ! grep -q native-message "$STUB_DIR/allowlist.in" || false
   grep -q 'native-message' "$STUB_DIR/standin-run.in"
 }
 
@@ -45,7 +45,7 @@ load test_helper
   f="$BATS_TEST_TMPDIR/allowed"; printf 'Evil.app\n' > "$f"
   ONEP_MAC_BROWSER_ALLOWLIST="$f" run "$OP" _browser-bridge '{id}' </dev/null
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-  ! grep -q Evil.app "$STUB_DIR/allowlist.in"
+  ! grep -q Evil.app "$STUB_DIR/allowlist.in" || false
   [[ "$output" == *"ignoring $f"* ]] || { echo "$output"; return 1; }
 }
 
@@ -55,7 +55,7 @@ load test_helper
   chmod +x "$BATS_TEST_TMPDIR/s/stat"
   PATH="$BATS_TEST_TMPDIR/s:$PATH" ONEP_MAC_BROWSER_ALLOWLIST="$f" run "$OP" _browser-bridge '{id}' </dev/null
   [ -f "$STUB_DIR/allowlist.in" ] || return 1
-  ! grep -q Evil.app "$STUB_DIR/allowlist.in"
+  ! grep -q Evil.app "$STUB_DIR/allowlist.in" || false
 }
 
 @test "an engine without porthole-standin-run is refused and says to reinstall Porthole" {
@@ -89,7 +89,7 @@ load test_helper
   chmod +x "$BATS_TEST_TMPDIR/s/stat"
   PATH="$BATS_TEST_TMPDIR/s:$PATH" ONEP_MAC_BROWSER_ALLOWLIST="$f" run "$OP" _browser-bridge '{id}' </dev/null
   [ -f "$STUB_DIR/allowlist.in" ] || return 1
-  ! grep -q Evil.app "$STUB_DIR/allowlist.in"
+  ! grep -q Evil.app "$STUB_DIR/allowlist.in" || false
 }
 
 @test "with no Porthole engine at all, nothing is run from the browser's working directory" {
@@ -105,7 +105,7 @@ load test_helper
 }
 
 @test "no socat is left in op or the preset (outside comments)" {
-  ! grep -hv '^[[:space:]]*#' "$OP" "${BATS_TEST_DIRNAME}/../1password.conf" | grep -n socat
+  ! grep -hv '^[[:space:]]*#' "$OP" "${BATS_TEST_DIRNAME}/../1password.conf" | grep -n socat || false
 }
 
 # The package installs the browser's manifest; a per-user one written by op would shadow it and go
