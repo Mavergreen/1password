@@ -527,8 +527,10 @@ ssh_agent_start() {
   { [ -n "$_ipc" ] && [ -x "$_ipc" ]; } \
     || die "the Porthole transport (s6-ipcserver) is missing -- reinstall Porthole"
   _bridge="$(dirname "$_ipc")/porthole-standin-bridge"
-  [ -x "$_bridge" ] \
-    || die "the Porthole stand-in bridge ($_bridge) is missing -- reinstall Porthole"
+  for _t in porthole-standin-bridge porthole-caller porthole-watch-exit; do
+    [ -x "$(dirname "$_ipc")/$_t" ] \
+      || die "the Porthole stand-in tool $_t is missing beside $_ipc -- reinstall Porthole"
+  done
   if ssh_agent_running; then
     # Reuse it only if it relays the way this op would (through the stand-in bridge). One started
     # before the stand-ins (s6 or socat straight to the app) outlives an update and would keep every

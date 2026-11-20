@@ -78,6 +78,17 @@ load test_helper
   ! grep -q 's6-ipcserver -a 0600' "$STUB_LOG" || return 1
 }
 
+@test "ssh-agent start refuses an engine whose bridge lacks porthole-caller and says to reinstall Porthole" {
+  echo 'true' > "$STUB_DIR/docker.stdout"
+  mkdir -p "$BATS_TEST_TMPDIR/engine"
+  cp "${BATS_TEST_DIRNAME}/stubs/s6-ipcserver" "${BATS_TEST_DIRNAME}/stubs/porthole-standin-bridge" \
+     "${BATS_TEST_DIRNAME}/stubs/porthole-watch-exit" "$BATS_TEST_TMPDIR/engine/"
+  ONEP_S6_IPCSERVER="$BATS_TEST_TMPDIR/engine/s6-ipcserver" run "$OP" ssh-agent start
+  [ "$status" -ne 0 ] || return 1
+  [[ "$output" == *"porthole-caller"*"reinstall Porthole"* ]] || { echo "$output"; return 1; }
+  ! grep -q 's6-ipcserver -a 0600' "$STUB_LOG" || return 1
+}
+
 @test "ssh-agent start warns when remote socket absent" {
   echo 1 > "$STUB_DIR/docker.exit"
   run "$OP" ssh-agent start

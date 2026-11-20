@@ -1,0 +1,4 @@
+#!/bin/sh
+# platform: host-agnostic
+# Stub: an engine stand-in tool; ssh-agent tests only check it is present.
+exit 0
