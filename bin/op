@@ -526,10 +526,14 @@ ssh_agent_start() {
   _ipc=$(s6_ipcserver_bin)
   { [ -n "$_ipc" ] && [ -x "$_ipc" ]; } \
     || die "the Porthole transport (s6-ipcserver) is missing -- reinstall Porthole"
+  _bridge="$(dirname "$_ipc")/porthole-standin-bridge"
+  [ -x "$_bridge" ] \
+    || die "the Porthole stand-in bridge ($_bridge) is missing -- reinstall Porthole"
   if ssh_agent_running; then
-    # Reuse it only if it relays the way this op would (s6-ipcclient). One started before the s6
-    # relay (socat) outlives an update, and every connection into the new container would fail.
-    if ps -o command= -p "$(cat "$SSH_AGENT_PID")" 2>/dev/null | grep -q s6-ipcclient; then
+    # Reuse it only if it relays the way this op would (through the stand-in bridge). One started
+    # before the stand-ins (s6 or socat straight to the app) outlives an update and would keep every
+    # Mac application's requests under one caller.
+    if ps -o command= -p "$(cat "$SSH_AGENT_PID")" 2>/dev/null | grep -q porthole-standin-bridge; then
       printf 'op ssh-agent already running (%s).\n' "$SSH_AGENT_SOCK"
       printf 'export SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
       return 0
@@ -541,23 +545,24 @@ ssh_agent_start() {
     || die "the app's SSH agent socket isn't there yet; enable Settings -> Developer -> Use the SSH agent in the app (op gui)"
   docker exec "$CONTAINER" sh -c 'command -v s6-ipcclient && command -v s6-ioconnect' >/dev/null 2>&1 \
     || die "the app's container has no s6 relay (it was built on an older Porthole base); update Porthole, then relaunch Linux 1Password"
+  docker exec "$CONTAINER" sh -c 'command -v porthole-standin-ctl && command -v porthole-standin' >/dev/null 2>&1 \
+    || die "the app's container has no stand-ins (it was built on an older Porthole base); update Porthole, then relaunch Linux 1Password"
   ensure_config_dir
   rm -f "$SSH_AGENT_SOCK"
   mkdir -p "$(dirname "$SSH_AGENT_SOCK")"
   _ipcdir=$(dirname "$_ipc")
   # s6-ipcserver binds $SSH_AGENT_SOCK owner-only (-a 0600, preserving the old socat mode=600), forks
-  # per connection, and runs the child with the connection on stdin/stdout; docker exec pipes it to
-  # the container's s6-ipcclient, which connects the app's SSH agent socket, and s6-ioconnect, which
-  # relays it (both from the Porthole base image). Its dir goes on PATH so the
-  # chain-loaded components (s6-ipcserver-socketbinder, s6-ipcserverd) resolve.
+  # per connection, and runs Porthole's porthole-standin-bridge with the connection on stdin/stdout.
+  # The bridge names the Mac application that connected and relays through that application's
+  # stand-in in the container, which connects the app's SSH agent socket itself -- so 1Password asks
+  # once per Mac application, naming it, and the approval lasts while that application runs. Its dir
+  # goes on PATH so the chain-loaded components (s6-ipcserver-socketbinder, s6-ipcserverd) resolve.
   if [ "$_foreground" -eq 1 ]; then
     PATH="$_ipcdir:$PATH"; export PATH
     echo $$ > "$SSH_AGENT_PID"   # exec keeps this pid
-    exec "$_ipc" -a 0600 "$SSH_AGENT_SOCK" \
-      docker exec -i "$CONTAINER" s6-ipcclient "$SSH_REMOTE_SOCK" s6-ioconnect
+    exec "$_ipc" -a 0600 "$SSH_AGENT_SOCK" "$_bridge" "$CONTAINER" ssh-agent "$SSH_REMOTE_SOCK"
   fi
-  PATH="$_ipcdir:$PATH" "$_ipc" -a 0600 "$SSH_AGENT_SOCK" \
-    docker exec -i "$CONTAINER" s6-ipcclient "$SSH_REMOTE_SOCK" s6-ioconnect &
+  PATH="$_ipcdir:$PATH" "$_ipc" -a 0600 "$SSH_AGENT_SOCK" "$_bridge" "$CONTAINER" ssh-agent "$SSH_REMOTE_SOCK" &
   echo $! > "$SSH_AGENT_PID"
   printf 'op ssh-agent started.\nexport SSH_AUTH_SOCK=%s\n' "$SSH_AGENT_SOCK"
 }

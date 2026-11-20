@@ -11,9 +11,10 @@ load test_helper
   log="$(cat "$STUB_LOG")"
   # Mac-side transport is s6-ipcserver, owner-only; no socat UNIX-LISTEN / escaped-colon hack.
   [[ "$log" == *"s6-ipcserver -a 0600 "* ]] || return 1
-  # The container side is s6-ipcclient (connects the app's agent socket) + s6-ioconnect (relays it),
-  # from the Porthole base image -- never socat.
-  [[ "$log" == *"docker exec -i 1password-gui s6-ipcclient /home/onepassword/.1password/agent.sock s6-ioconnect"* ]] || return 1
+  # Each connection goes through the engine's porthole-standin-bridge, which relays it via the calling
+  # Mac application's stand-in in the container (so 1Password names that application) -- never socat.
+  [[ "$log" == *"s6-ipcserver -a 0600 "*" "*"/stubs/porthole-standin-bridge 1password-gui ssh-agent /home/onepassword/.1password/agent.sock"* ]] \
+    || { echo "$log"; return 1; }
   [[ "$log" != *socat* ]] || return 1
   [[ "$log" != *"UNIX-LISTEN"* ]] || return 1
   [[ "$output" == *"export SSH_AUTH_SOCK="* ]] || return 1
@@ -22,7 +23,7 @@ load test_helper
 @test "ssh-agent start is idempotent" {
   echo 'true' > "$STUB_DIR/docker.stdout"
   touch "$STUB_DIR/agent.alive"
-  echo 's6-ipcserverd -- docker exec -i 1password-gui s6-ipcclient /home/onepassword/.1password/agent.sock s6-ioconnect' > "$STUB_DIR/agent.command"
+  echo 's6-ipcserverd -- /x/porthole-standin-bridge 1password-gui ssh-agent /home/onepassword/.1password/agent.sock' > "$STUB_DIR/agent.command"
   mkdir -p "$ONEP_CONFIG_DIR"
   echo 4242 > "$ONEP_CONFIG_DIR/ssh-agent.pid"
   run "$OP" ssh-agent start
@@ -32,18 +33,19 @@ load test_helper
   [[ "$output" == *"already running"* ]] || return 1
 }
 
-# An agent started before the s6 relay (socat) outlives an update and would fail every connection
-# into the new container, which has no socat: it is replaced, not reported as "already running".
-@test "ssh-agent start replaces a running agent that still relays with socat" {
+# An agent started before the stand-ins (relaying straight to the app, with s6 or socat) outlives an
+# update and would keep every request on one undifferentiated caller: it is replaced, not reported as
+# "already running".
+@test "ssh-agent start replaces a running agent that relays without the stand-in bridge" {
   echo 'true' > "$STUB_DIR/docker.stdout"
   touch "$STUB_DIR/agent.alive"
-  echo 's6-ipcserverd -- docker exec -i 1password-gui socat STDIO UNIX-CONNECT:/home/onepassword/.1password/agent.sock' > "$STUB_DIR/agent.command"
+  echo 's6-ipcserverd -- docker exec -i 1password-gui s6-ipcclient /home/onepassword/.1password/agent.sock s6-ioconnect' > "$STUB_DIR/agent.command"
   mkdir -p "$ONEP_CONFIG_DIR"
   echo 4242 > "$ONEP_CONFIG_DIR/ssh-agent.pid"
   run "$OP" ssh-agent start
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   [[ "$output" != *"already running"* ]] || return 1
-  grep -q 's6-ipcserver -a 0600 .*s6-ipcclient' "$STUB_LOG" || { cat "$STUB_LOG"; return 1; }
+  grep -q 's6-ipcserver -a 0600 .*porthole-standin-bridge' "$STUB_LOG" || { cat "$STUB_LOG"; return 1; }
 }
 
 # A container from a Porthole base without s6 can't be relayed into: say so instead of starting a
@@ -54,6 +56,25 @@ load test_helper
   run "$OP" ssh-agent start
   [ "$status" -ne 0 ] || return 1
   [[ "$output" == *"Porthole"* ]] || { echo "$output"; return 1; }
+  ! grep -q 's6-ipcserver -a 0600' "$STUB_LOG" || return 1
+}
+
+@test "ssh-agent start refuses a container without the stand-in tools and says to update Porthole" {
+  echo 'true' > "$STUB_DIR/docker.stdout"
+  touch "$STUB_DIR/no-standin"
+  run "$OP" ssh-agent start
+  [ "$status" -ne 0 ] || return 1
+  [[ "$output" == *"update Porthole, then relaunch Linux 1Password"* ]] || { echo "$output"; return 1; }
+  ! grep -q 's6-ipcserver -a 0600' "$STUB_LOG" || return 1
+}
+
+@test "ssh-agent start refuses an engine without porthole-standin-bridge and says to reinstall Porthole" {
+  echo 'true' > "$STUB_DIR/docker.stdout"
+  mkdir -p "$BATS_TEST_TMPDIR/engine"
+  cp "${BATS_TEST_DIRNAME}/stubs/s6-ipcserver" "$BATS_TEST_TMPDIR/engine/"
+  ONEP_S6_IPCSERVER="$BATS_TEST_TMPDIR/engine/s6-ipcserver" run "$OP" ssh-agent start
+  [ "$status" -ne 0 ] || return 1
+  [[ "$output" == *"porthole-standin-bridge"*"reinstall Porthole"* ]] || { echo "$output"; return 1; }
   ! grep -q 's6-ipcserver -a 0600' "$STUB_LOG" || return 1
 }
 
@@ -141,4 +162,6 @@ load test_helper
   run "$OP" ssh-agent start --foreground
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
   [ -s "$ONEP_CONFIG_DIR/ssh-agent.pid" ] || return 1
+  grep -q "s6-ipcserver -a 0600 .*/porthole-standin-bridge 1password-gui ssh-agent /home/onepassword/.1password/agent.sock" "$STUB_LOG" \
+    || { cat "$STUB_LOG"; return 1; }
 }

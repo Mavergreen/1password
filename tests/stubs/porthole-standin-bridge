@@ -1,0 +1,4 @@
+#!/bin/sh
+# platform: host-agnostic
+# Stub: the engine's per-connection stand-in bridge; ssh-agent tests only check it is named.
+exit 0
