@@ -47,10 +47,14 @@ teardown() { rm -rf "$GEN"; }
   grep -qE 'xdotool wmctrl x11-utils' "$DF" || return 1
 }
 
-@test "1Password Dockerfile writes the browser-support allowlist (EXTRA_SETUP)" {
-  grep -q '/etc/1password/custom_allowed_browsers' "$DF" || return 1
-  grep -q "printf 'socat\\\\nsocat1\\\\n'" "$DF" || return 1
+# The allowlist is written at each browser connection (op _browser-bridge), naming Mac browsers; the
+# image no longer bakes socat into it.
+@test "1Password Dockerfile bakes no browser allowlist" {
+  ! grep -q 'custom_allowed_browsers' "$DF" || return 1
+  ! grep -q socat "$DF" || return 1
 }
+
+
 
 @test "1Password entrypoint keeps ambient CAP_SYS_PTRACE via setpriv" {
   sh -n "$ENTRY" || return 1

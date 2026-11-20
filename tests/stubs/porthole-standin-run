@@ -1,0 +1,5 @@
+#!/bin/sh
+# platform: host-agnostic
+# Stub: Porthole's porthole-standin-run; logs its argv and keeps the stdin it was handed.
+printf 'porthole-standin-run %s\n' "$*" >> "$STUB_LOG"
+cat > "$STUB_DIR/standin-run.in"

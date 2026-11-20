@@ -16,6 +16,8 @@ fi
 # The stand-in probe likewise ($STUB_DIR/no-standin).
 case "$*" in *"command -v porthole-standin-ctl"*) [ -f "$STUB_DIR/no-standin" ] && exit 1 ;; esac
 case "$*" in *"command -v s6-ipcclient"*) [ -f "$STUB_DIR/no-s6" ] && exit 1; exit 0 ;; esac
+# The browser allowlist write: keep what it was handed. Does not consume a numbered replay slot.
+case "$*" in *custom_allowed_browsers*) cat > "$STUB_DIR/allowlist.in"; exit 0 ;; esac
 _n=$(cat "$STUB_DIR/docker.calls" 2>/dev/null || echo 0)
 _n=$((_n + 1))
 echo "$_n" > "$STUB_DIR/docker.calls"

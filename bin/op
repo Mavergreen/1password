@@ -662,25 +662,53 @@ cmd_ssh_agent() {
 
 # --- browser integration -----------------------------------------------------
 
-# The container command that runs the real 1Password browser-support helper
-# under socat (its allowlisted parent, so name+permission browser verification
-# passes). Run as uid 1000 / gid 0 -- NOT the onepassword group -- so the
-# helper's setgid actually changes egid and its secure-mode (AT_SECURE) check
-# passes. The extension id is appended by browser_bridge_run.
-browser_bridge_cmd() {
-  printf 'docker exec -i -u 1000:0 -e HOME=%s -e XDG_RUNTIME_DIR=%s %s socat STDIO EXEC:/opt/1Password/1Password-BrowserSupport' "$APP_HOME" "$APP_XDG_RUNTIME" "$CONTAINER"
+# Each Mac browser reaches 1Password as itself. 1Password's browser-support helper verifies its
+# PARENT's executable, by file name, against /etc/1password/custom_allowed_browsers in the container.
+# Porthole's porthole-standin-run makes that parent a stand-in at the calling browser's own path
+# (/Applications/Momiji-Rolling.app), so the allowlist names Mac browsers by their .app names.
+
+# Browsers 1Password trusts here with no setup: the Mac equivalents of its built-in list.
+BROWSERS_PRESEEDED='Momiji.app Momiji-Stable.app Momiji-Rolling.app PowerFox.app Chromium.app Safari.app'
+# The user's additions, as on Linux: one browser per line, # comments. Honoured only if root owns it
+# and no one else can write it -- 1Password's own rule for the file it reads.
+mac_browser_allowlist() { printf '%s' "${ONEP_MAC_BROWSER_ALLOWLIST:-/etc/1password/custom_allowed_browsers}"; }
+
+# The allowlist: the pre-seeded browsers, then the trusted Mac file's entries; one per line.
+browser_allowlist() {
+  for _b in $BROWSERS_PRESEEDED; do printf '%s\n' "$_b"; done
+  _f=$(mac_browser_allowlist)
+  [ -f "$_f" ] || return 0
+  # shellcheck disable=SC2046
+  set -- $(stat -f '%u %Lp' "$_f" 2>/dev/null)
+  _perm=${2:-777}
+  if [ "${1:-}" != 0 ] || [ $(( 0$_perm & 022 )) -ne 0 ]; then
+    echo "op: ignoring $_f: it must be owned by root and writable only by root (sudo chown root:wheel, chmod 644)" >&2
+    return 0
+  fi
+  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$_f"
 }
 
 # Invoked by the browser (Momiji, PowerFox) through the package's libexec/op-browser-bridge, which
-# its machine-wide native-messaging manifest names; a transparent byte pipe.
+# its machine-wide native-messaging manifest names; stdin/stdout are the browser's native-messaging
+# stream, so nothing before the helper may read stdin or write stdout.
 # Firefox passes the manifest path then the extension id; the helper needs
 # the extension id as its argv, so forward the last argument.
 browser_bridge_run() {
   load_docker_env
   _extid=""
   for _a in "$@"; do _extid=$_a; done
-  exec docker exec -i -u 1000:0 -e HOME="$APP_HOME" -e XDG_RUNTIME_DIR="$APP_XDG_RUNTIME" \
-    "$CONTAINER" socat STDIO "EXEC:/opt/1Password/1Password-BrowserSupport $_extid"
+  _run="$(dirname "$(s6_ipcserver_bin)")/porthole-standin-run"
+  [ -x "$_run" ] || die "the Porthole stand-in tool porthole-standin-run is missing ($_run) -- reinstall Porthole"
+  # Written as root, 0644 (1Password ignores the file otherwise), before every helper start, so an
+  # edit of the Mac file takes effect at the browser's next connection.
+  browser_allowlist | docker exec -i -u 0 "$CONTAINER" sh -c 'umask 022 && mkdir -p /etc/1password &&
+    cat > /etc/1password/custom_allowed_browsers.new &&
+    mv -f /etc/1password/custom_allowed_browsers.new /etc/1password/custom_allowed_browsers' >&2 \
+    || die "could not write the browser allowlist in $CONTAINER"
+  # Run as uid 1000 / gid 0 -- NOT the onepassword group -- so the helper's setgid actually changes
+  # egid and its secure-mode (AT_SECURE) check passes.
+  exec "$_run" "$CONTAINER" -u 1000:0 -e HOME="$APP_HOME" -e XDG_RUNTIME_DIR="$APP_XDG_RUNTIME" \
+    -- /opt/1Password/1Password-BrowserSupport "$_extid"
 }
 
 cmd_browser_bridge() {

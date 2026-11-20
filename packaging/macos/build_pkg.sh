@@ -21,6 +21,9 @@ printf 'APP_VERSION=%s\n' "$VERSION" >> "$T/share/porthole/presets/1password.con
 install -m 0644 "$REPO/1password.menu.json" "$T/share/porthole/presets/1password.menu.json"
 install -m 0755 "$REPO/bin/op"              "$T/bin/op"
 install -m 0755 "$HERE/op-browser-bridge"   "$T/libexec/op-browser-bridge"
+# 1Password's browser allowlist template; the postinstall puts it at /etc/1password/ only if absent.
+install -d "$T/share/1password"
+install -m 0644 "$HERE/custom_allowed_browsers" "$T/share/1password/custom_allowed_browsers"
 NMH="$ROOT/Library/Application Support/Mozilla/NativeMessagingHosts"
 install -d "$NMH"
 install -m 0644 "$HERE/com.1password.1password.json" "$NMH/com.1password.1password.json"

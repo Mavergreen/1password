@@ -97,6 +97,34 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
   [ "$(sed -n 2p "$WORK/args")" = "prepare-for-install --root $WORK/v --apps-dir $WORK/v/Applications $c" ] || { cat "$WORK/args"; return 1; }
 }
 
+@test "the .pkg ships 1Password's browser allowlist template in its tree, never in /etc" {
+  run sh "$REPO/packaging/macos/build_pkg.sh" 9.9.9 "$WORK/out.pkg"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  pkgutil --expand "$WORK/out.pkg" "$WORK/x"
+  files="$(lsbom -s "$WORK"/x/*.pkg/Bom)"
+  echo "$files" | grep -qx './usr/local/mavergreen/1password/share/1password/custom_allowed_browsers' \
+    || { echo "$files"; return 1; }
+  ! echo "$files" | grep -q '^./etc/' || return 1
+  t="$REPO/packaging/macos/custom_allowed_browsers"
+  grep -q '^# 1Password for Linux custom browser allowlist$' "$t"
+  grep -q '^# On a Mac, an entry is the browser application.s name, such as Google Chrome.app$' "$t"
+  ! grep -v '^#' "$t" | grep -q . || return 1   # only comments: it allows nothing by itself
+}
+
+@test "postinstall installs the allowlist template only when the Mac has no allowlist" {
+  e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
+  printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"
+  t="$WORK/v/usr/local/mavergreen/1password/share/1password"; mkdir -p "$t"
+  printf '# template\n' > "$t/custom_allowed_browsers"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/postinstall-hook.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [ "$(cat "$WORK/v/etc/1password/custom_allowed_browsers")" = "# template" ]
+  [ "$(stat -f %Lp "$WORK/v/etc/1password/custom_allowed_browsers")" = 644 ]
+  printf 'Vivaldi.app\n' > "$WORK/v/etc/1password/custom_allowed_browsers"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/postinstall-hook.sh"
+  [ "$(cat "$WORK/v/etc/1password/custom_allowed_browsers")" = "Vivaldi.app" ]
+}
+
 @test "on another volume, the postinstall hook succeeds without touching the running system" {
   e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
   printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"
