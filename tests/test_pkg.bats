@@ -145,7 +145,7 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
 
 @test "materialize turns the conf into Linux 1Password.app with a menu bar" {
   [ -x "$PORTHOLE_REPO/bin/porthole" ] || skip "porthole engine not available as a sibling"
-  PORTHOLE_MATERIALIZE_NO_ICON=1 PORTHOLE_ICON_CACHE="$WORK/sys-icons" PORTHOLE_USER_ICON_CACHE="$WORK/user-icons" "$PORTHOLE_REPO/bin/porthole" \
+  PORTHOLE_MATERIALIZE_NO_ICON=1 PORTHOLE_LSREGISTER=true PORTHOLE_ICON_CACHE="$WORK/sys-icons" PORTHOLE_USER_ICON_CACHE="$WORK/user-icons" "$PORTHOLE_REPO/bin/porthole" \
     materialize "$REPO/1password.conf" --apps-dir "$WORK/apps"
   [ -d "$WORK/apps/Linux 1Password.app" ]
   [ -f "$WORK/apps/Linux 1Password.app/Contents/Resources/menu.json" ]
