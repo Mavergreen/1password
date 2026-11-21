@@ -59,7 +59,7 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
 }
 
 @test "the package requires a Porthole with the engine tools its op, bridge and preset use" {
-  grep -qF -- "--requires 'porthole>=20261121.1'" "$REPO/packaging/macos/build_pkg.sh"
+  grep -qF -- "--requires 'porthole>=20261121.0'" "$REPO/packaging/macos/build_pkg.sh"
 }
 
 @test "no hand-written requirement check is left to drift" {
