@@ -19,6 +19,9 @@ for _p in "$ROOT"/Users/*/Library/LaunchAgents/dev.mavergreen.op-ssh-agent.plist
     _u=$(stat -f %Su "$_p")
     _lw=$(pgrep -u "$_u" loginwindow 2>/dev/null | head -n 1)
     [ -z "$_lw" ] || launchctl bsexec "$_lw" sudo -u "$_u" launchctl unload "$_p" >/dev/null 2>&1 || :
+    # The agent's s6 server outlives its unloaded job. (A server Porthole's follower runs exits too;
+    # the follower serves again on its next check.)
+    case $_p in *op-ssh-agent.plist) pkill -u "$_u" -f 'porthole-standin-bridge [^ ]* ssh-agent ' 2>/dev/null || : ;; esac
   fi
   rm -f "$_p"
 done
