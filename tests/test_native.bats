@@ -35,6 +35,13 @@ conf() { ( . "$REPO/1password.conf"; eval "printf '%s' \"\$$1\"" ); }
     | diff -u - <(grep -v '^#' "$REPO/packaging/macos/preseeded_browsers")
 }
 
+@test "the menu bar shows 1Password's own macOS menu-bar pictures for its tray's" {
+  [ "$(conf MENUBAR_ART)" = 'unlocked locked prompt' ]
+  [ "$(conf MENUBAR_ART_unlocked)" = '/opt/1Password/resources/app.asar:/images/tray_unlocked.png /opt/1Password/resources/app.asar:/images/application_icons/macos_menubar/appicon_16_monochrome_unlocked_Template@2x.png' ]
+  [ "$(conf MENUBAR_ART_locked)" = '/opt/1Password/resources/app.asar:/images/tray_locked.png /opt/1Password/resources/app.asar:/images/application_icons/macos_menubar/appicon_16_monochrome_locked_Template@2x.png' ]
+  [ "$(conf MENUBAR_ART_prompt)" = '/opt/1Password/resources/app.asar:/images/tray_prompt.png /opt/1Password/resources/app.asar:/images/application_icons/macos_menubar/appicon_16_monochrome_notification_Template@2x.png' ]
+}
+
 # Each runs with a bare PATH (a browser starts its host that way), so neither looks on the PATH.
 stub_engine() {
   e="$WORK/engine"; mkdir -p "$e"
