@@ -43,12 +43,10 @@ teardown() { rm -rf "$GEN"; }
   grep -q 'useradd -m -u 1000 -g onepassword onepassword' "$DF" || return 1
 }
 
-@test "1Password Dockerfile installs the op-CLI support packages" {
-  grep -qE 'xdotool wmctrl x11-utils' "$DF" || return 1
+@test "1Password Dockerfile carries none of the old op wrapper's window-driving tools" {
+  ! grep -qE 'xdotool|wmctrl|x11-utils' "$DF" || return 1
 }
 
-# The allowlist is written at each browser connection (op _browser-bridge), naming Mac browsers; the
-# image no longer bakes socat into it.
 @test "1Password Dockerfile bakes no browser allowlist" {
   ! grep -q 'custom_allowed_browsers' "$DF" || return 1
   ! grep -q socat "$DF" || return 1

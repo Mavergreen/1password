@@ -58,19 +58,8 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
   [ "$(/usr/libexec/PlistBuddy -c 'Print :outside' "$WORK/t/usr/local/mavergreen/1password/mavergreen.plist" | grep -c 'NativeMessagingHosts/com.1password.1password.json')" -eq 1 ] || return 1
 }
 
-# Browsers start native hosts with a bare PATH, so the bridge finds op beside itself, never on the PATH.
-@test "the bridge runs the op beside it with the browser's argv" {
-  mkdir -p "$WORK/tree/bin" "$WORK/tree/libexec"
-  cp "$REPO/packaging/macos/op-browser-bridge" "$WORK/tree/libexec/"
-  printf '#!/bin/sh\nprintf "%%s|" "$@" > "%s/op.argv"\n' "$WORK" > "$WORK/tree/bin/op"
-  chmod +x "$WORK/tree/bin/op" "$WORK/tree/libexec/op-browser-bridge"
-  run env -i PATH=/usr/bin:/bin "$WORK/tree/libexec/op-browser-bridge" /path/to/manifest.json '{ext-id}'
-  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-  [ "$(cat "$WORK/op.argv")" = "_browser-bridge|/path/to/manifest.json|{ext-id}|" ]
-}
-
-@test "the package requires a Porthole whose base image carries the stand-ins" {
-  grep -qF -- "--requires 'porthole>=20261120.1'" "$REPO/packaging/macos/build_pkg.sh"
+@test "the package requires a Porthole with the engine tools its op, bridge and preset use" {
+  grep -qF -- "--requires 'porthole>=20261121.1'" "$REPO/packaging/macos/build_pkg.sh"
 }
 
 @test "no hand-written requirement check is left to drift" {
@@ -103,6 +92,8 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
   pkgutil --expand "$WORK/out.pkg" "$WORK/x"
   files="$(lsbom -s "$WORK"/x/*.pkg/Bom)"
   echo "$files" | grep -qx './usr/local/mavergreen/1password/share/1password/custom_allowed_browsers' \
+    || { echo "$files"; return 1; }
+  echo "$files" | grep -qx './usr/local/mavergreen/1password/share/1password/preseeded_browsers' \
     || { echo "$files"; return 1; }
   ! echo "$files" | grep -q '^./etc/' || return 1
   t="$REPO/packaging/macos/custom_allowed_browsers"
@@ -140,6 +131,7 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
 @test "on another volume, the postinstall hook succeeds without touching the running system" {
   e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
   printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"
+  mkdir -p "$WORK/v/Users/someone/Library/LaunchAgents"; : > "$WORK/v/Users/someone/Library/LaunchAgents/dev.mavergreen.op-ssh-agent.plist"
   mkdir -p "$WORK/stubs"; : > "$WORK/log"
   for t in launchctl open kextstat kextload kextunload killall pkill osascript sudo docker docker-machine porthole op; do
     printf '#!/bin/sh\necho "%s $*" >> "%s/log"\n' "$t" "$WORK" > "$WORK/stubs/$t"; chmod +x "$WORK/stubs/$t"
@@ -199,4 +191,17 @@ stub_updater() {
   run env UPD_APP="$WORK/nothing-here.app" sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg"
   [ "$status" -ne 0 ] || return 1
   [[ "$output" == *"no updater .app"* ]] || false
+}
+
+# The old op installed these to serve the SSH agent and to watch for prompts; the app does both now.
+@test "postinstall removes the old op's LaunchAgents, and only those" {
+  e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
+  printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"
+  la="$WORK/v/Users/someone/Library/LaunchAgents"; mkdir -p "$la"
+  : > "$la/dev.mavergreen.op-ssh-agent.plist"; : > "$la/dev.mavergreen.op-watch.plist"; : > "$la/org.example.keep.plist"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/postinstall-hook.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [ ! -e "$la/dev.mavergreen.op-ssh-agent.plist" ]
+  [ ! -e "$la/dev.mavergreen.op-watch.plist" ]
+  [ -e "$la/org.example.keep.plist" ]
 }

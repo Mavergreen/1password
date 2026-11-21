@@ -8,6 +8,20 @@ if [ ! -e "$_allow" ] && [ -f "$_tmpl" ]; then
   { mkdir -p "$ROOT/etc/1password" && install -m 0644 "$_tmpl" "$_allow"; } \
     || echo "1password postinstall: could not install $_allow from $_tmpl; carrying on" >&2
 fi
+# The old op's LaunchAgents (its SSH agent, its prompt watcher) are gone with it: the app serves the
+# agent while its own setting says so, and its prompts come forward themselves. Each user's are
+# removed; on the running system the console user's are unloaded first (10.9 has no launchctl
+# asuser: bsexec into their session).
+for _p in "$ROOT"/Users/*/Library/LaunchAgents/dev.mavergreen.op-ssh-agent.plist \
+          "$ROOT"/Users/*/Library/LaunchAgents/dev.mavergreen.op-watch.plist; do
+  [ -f "$_p" ] || continue
+  if [ -z "$ROOT" ] || [ "$ROOT" = / ]; then
+    _u=$(stat -f %Su "$_p")
+    _lw=$(pgrep -u "$_u" loginwindow 2>/dev/null | head -n 1)
+    [ -z "$_lw" ] || launchctl bsexec "$_lw" sudo -u "$_u" launchctl unload "$_p" >/dev/null 2>&1 || :
+  fi
+  rm -f "$_p"
+done
 _porthole="$ROOT/Applications/Porthole.app/Contents/Resources/engine/bin/porthole"
 _conf="$ROOT/usr/local/mavergreen/1password/share/porthole/presets/1password.conf"
 "$_porthole" materialize "$_conf" --apps-dir "$ROOT/Applications" || exit 1

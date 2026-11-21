@@ -1,4 +1,0 @@
-#!/bin/sh
-# platform: host-agnostic
-printf 'porthole-recover-watch %s\n' "$*" >> "$STUB_LOG"
-exit 0

@@ -1,7 +1,8 @@
 #!/bin/sh
 # platform: macOS-only -- pkgbuild and productbuild assemble the pkg
 #   usage: build_pkg.sh <version> <out.pkg>
-#          The 1Password preset: op and the preset conf in the product's tree. Its postinstall asks
+#          The 1Password preset: op (1Password's own CLI, through Porthole) and the preset conf in the
+#          product's tree. Its postinstall asks
 #          the installed Porthole to materialize "Linux 1Password.app", which the manifest declares
 #          as generated so uninstall removes it. The browsers' machine-wide native-messaging manifest
 #          names the bridge in the tree, so the 1Password extension reaches the app with no setup.
@@ -24,6 +25,8 @@ install -m 0755 "$HERE/op-browser-bridge"   "$T/libexec/op-browser-bridge"
 # 1Password's browser allowlist template; the postinstall puts it at /etc/1password/ only if absent.
 install -d "$T/share/1password"
 install -m 0644 "$HERE/custom_allowed_browsers" "$T/share/1password/custom_allowed_browsers"
+# The browsers we pre-seed, read by the preset's browser host beside the user's own list.
+install -m 0644 "$HERE/preseeded_browsers" "$T/share/1password/preseeded_browsers"
 NMH="$ROOT/Library/Application Support/Mozilla/NativeMessagingHosts"
 install -d "$NMH"
 install -m 0644 "$HERE/com.1password.1password.json" "$NMH/com.1password.1password.json"
@@ -31,7 +34,7 @@ install -m 0644 "$HERE/com.1password.1password.json" "$NMH/com.1password.1passwo
 SCR=$(mktemp -d "${TMPDIR:-/tmp}/1pm-scripts.XXXXXX")
 set -- --stage "$ROOT" --product 1password --name "1Password for Mavericks" \
   --version "$VERSION" --generated "Applications/Linux 1Password.app" \
-  --requires 'porthole>=20261120.1' --postinstall-hook "$HERE/postinstall-hook.sh" \
+  --requires 'porthole>=20261121.1' --postinstall-hook "$HERE/postinstall-hook.sh" \
   --scripts-out "$SCR"
 # The Sparkle updater (build/build-updater.sh), and its daily check: releases reach installed Macs.
 if [ -n "${UPD_APP:-}" ]; then

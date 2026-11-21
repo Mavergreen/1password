@@ -1,0 +1,8 @@
+# The Mac browsers Linux 1Password's extension may connect from, as 1Password for Mavericks ships
+# them; your own go in /etc/1password/custom_allowed_browsers.
+Momiji.app
+Momiji-Stable.app
+Momiji-Rolling.app
+PowerFox.app
+Chromium.app
+Safari.app
