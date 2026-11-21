@@ -69,8 +69,8 @@ assert m["allowed_extensions"] == ["{d634138d-c276-4fc8-924b-40a0ea21d284}"], m'
   [ "$(cat "$WORK/op.argv")" = "_browser-bridge|/path/to/manifest.json|{ext-id}|" ]
 }
 
-@test "the package requires a Porthole whose base image carries the s6 relay" {
-  grep -qF -- "--requires 'porthole>=20261119.1'" "$REPO/packaging/macos/build_pkg.sh"
+@test "the package requires a Porthole whose base image carries the stand-ins" {
+  grep -qF -- "--requires 'porthole>=20261120.1'" "$REPO/packaging/macos/build_pkg.sh"
 }
 
 @test "no hand-written requirement check is left to drift" {

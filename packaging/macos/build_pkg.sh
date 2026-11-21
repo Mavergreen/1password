@@ -31,7 +31,7 @@ install -m 0644 "$HERE/com.1password.1password.json" "$NMH/com.1password.1passwo
 SCR=$(mktemp -d "${TMPDIR:-/tmp}/1pm-scripts.XXXXXX")
 set -- --stage "$ROOT" --product 1password --name "1Password for Mavericks" \
   --version "$VERSION" --generated "Applications/Linux 1Password.app" \
-  --requires 'porthole>=20261119.1' --postinstall-hook "$HERE/postinstall-hook.sh" \
+  --requires 'porthole>=20261120.1' --postinstall-hook "$HERE/postinstall-hook.sh" \
   --scripts-out "$SCR"
 # The Sparkle updater (build/build-updater.sh), and its daily check: releases reach installed Macs.
 if [ -n "${UPD_APP:-}" ]; then
