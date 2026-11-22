@@ -25,6 +25,15 @@ for _p in "$ROOT"/Users/*/Library/LaunchAgents/dev.mavergreen.op-ssh-agent.plist
   fi
   rm -f "$_p"
 done
+# The old `op browser connect` wrote each user a manifest naming its launcher, `op _browser-bridge`.
+# Firefox reads a user's own manifest before this package's machine-wide one, and op is 1Password's
+# CLI now, with no such command, so the extension found no app. Only those two files go.
+for _h in "$ROOT"/Users/*; do
+  _m="$_h/Library/Application Support/Mozilla/NativeMessagingHosts/com.1password.1password.json"
+  [ -f "$_m" ] && grep -q '/\.config/1p/op-browser-bridge"' "$_m" && rm -f "$_m"
+  _b="$_h/.config/1p/op-browser-bridge"
+  [ -f "$_b" ] && grep -q '^# Written by `op browser connect`\.$' "$_b" && rm -f "$_b"
+done
 _porthole="$ROOT/Applications/Porthole.app/Contents/Resources/engine/bin/porthole"
 _conf="$ROOT/usr/local/mavergreen/1password/share/porthole/presets/1password.conf"
 "$_porthole" materialize "$_conf" --apps-dir "$ROOT/Applications" || exit 1

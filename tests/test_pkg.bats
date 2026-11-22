@@ -205,3 +205,26 @@ stub_updater() {
   [ ! -e "$la/dev.mavergreen.op-watch.plist" ]
   [ -e "$la/org.example.keep.plist" ]
 }
+
+# The old `op browser connect` wrote a per-user manifest naming `op _browser-bridge`. Firefox reads a
+# user's own manifest before the machine-wide one, and op is 1Password's CLI now, with no such
+# command: the extension found no app and asked for the password itself.
+@test "postinstall removes the old op's per-user browser manifest and its launcher, and only those" {
+  e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"
+  printf '#!/bin/sh\n' > "$e/porthole"; chmod +x "$e/porthole"
+  for u in someone other; do
+    mkdir -p "$WORK/v/Users/$u/Library/Application Support/Mozilla/NativeMessagingHosts" "$WORK/v/Users/$u/.config/1p"
+  done
+  old="$WORK/v/Users/someone/Library/Application Support/Mozilla/NativeMessagingHosts/com.1password.1password.json"
+  printf '{\n  "name": "com.1password.1password",\n  "path": "/Users/someone/.config/1p/op-browser-bridge",\n  "type": "stdio"\n}\n' > "$old"
+  printf '#!/bin/sh\n# Written by `op browser connect`.\nexec op _browser-bridge "$@"\n' > "$WORK/v/Users/someone/.config/1p/op-browser-bridge"
+  mine="$WORK/v/Users/other/Library/Application Support/Mozilla/NativeMessagingHosts/com.1password.1password.json"
+  printf '{\n  "name": "com.1password.1password",\n  "path": "/opt/elsewhere/host",\n  "type": "stdio"\n}\n' > "$mine"
+  printf '#!/bin/sh\n# my own\n' > "$WORK/v/Users/other/.config/1p/op-browser-bridge"
+  run env ROOT="$WORK/v" sh "$REPO/packaging/macos/postinstall-hook.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [ ! -e "$old" ] || return 1
+  [ ! -e "$WORK/v/Users/someone/.config/1p/op-browser-bridge" ] || return 1
+  [ -e "$mine" ] || return 1
+  [ -e "$WORK/v/Users/other/.config/1p/op-browser-bridge" ] || return 1
+}
