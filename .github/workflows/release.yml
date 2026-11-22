@@ -94,8 +94,15 @@ jobs:
           path: ~/.cache/mavergreen-clang22
           key: clang22-${{ runner.os }}-${{ hashFiles('components/clang22/version') }}
 
+      # test_1password renders the container with Porthole's generator, as on a developer's box. Cloned
+      # outside the workspace, so the clean-tree check never sees it.
+      - name: Porthole, for its generator
+        run: git clone -q --depth 1 https://github.com/Mavergreen/porthole.git "$RUNNER_TEMP/porthole"
+
       # Every host-agnostic test runs here and none may skip; the macOS-only ones run in vm-test.
       - name: Run the repo's tests
+        env:
+          PORTHOLE_DIR: ${{ runner.temp }}/porthole
         run: sh "$SHIPYARD_SCRIPTS/run-repo-tests.sh" --strict-host
 
       - name: clang22's Mach-O readers, for the steps that read the pkg
