@@ -1,5 +1,5 @@
 #!/bin/sh
-# platform: macOS-only -- pkgbuild and productbuild assemble the pkg
+# platform: host-agnostic -- shipyard's stevedore seams assemble the pkg, on a Mac or Linux
 #   usage: build_pkg.sh <version> <out.pkg>
 #          The 1Password preset: op (1Password's own CLI, through Porthole) and the preset conf in the
 #          product's tree. Its postinstall asks
@@ -44,8 +44,8 @@ fi
 sh "$SHIPYARD/stage_product.sh" "$@"
 
 COMPONENT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/1pm-pkg.XXXXXX")
-pkgbuild --root "$ROOT" --identifier dev.mavergreen.1password --version "$VERSION" \
-    --scripts "$SCR" --install-location / "$COMPONENT_DIR/mavericks-1password-component.pkg"
+sh "$SHIPYARD/build_component_pkg.sh" --root "$ROOT" --identifier dev.mavergreen.1password --version "$VERSION" \
+  --install-location / --scripts "$SCR" --out "$COMPONENT_DIR/mavericks-1password-component.pkg" >&2
 
 mkdir -p "$(dirname "$OUT")"
 sh "$SHIPYARD/set_install_floor.sh" --identifier dev.mavergreen.1password --title "1Password for Mavericks" \

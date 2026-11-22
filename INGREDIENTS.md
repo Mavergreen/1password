@@ -8,6 +8,7 @@ the preset conf (`1password.conf` + `1password.menu.json`) and the `bin/op` CLI;
 |---|---|---|---|
 | 1Password (own upstream) | `UPSTREAM_VERSION` | manual — 1Password ships no public version feed, so the number is **hand-bumped** (it only names the release; the container floats) | edit `UPSTREAM_VERSION`, push to main → auto-cuts `<version>-mavericks.1` |
 | Porthole engine (runtime prerequisite) | not baked — `preinstall` requires it installed | github-actions manager (the `@v1` install action used in CI) | user updates Porthole itself (Sparkle) |
+| clang22 (the compiler for the Sparkle updater) | `components/clang22/version` — one `22.X.Y-mavericks.N` release tag | regex manager on `Mavergreen/clang-22` github-releases | `build/build-updater.sh` takes that release from shipyard's `fetch_clang22.sh` on any host; a bump rebuilds the updater in CI and ships with the next release |
 | shipyard (release tooling + gate) | `Mavergreen/shipyard@v1` (install action) | github-actions manager tracks the `@v1` tag | `@v1` is a moving tag |
 
 The container is `UPDATE=float` (see `1password.conf`): 1Password self-gates on a server-side minimum

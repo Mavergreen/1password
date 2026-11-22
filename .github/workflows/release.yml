@@ -45,7 +45,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-26   # pkgbuild/productbuild are macOS-only (the payload is arch-independent)
+    # Linux: the pinned clang22 cross-builds the updater against the 10.9 SDK and shipyard's stevedore
+    # seams make the pkg. The tests that read the pkg with Apple's tools run on 10.9 in vm-test.
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
       publish: ${{ steps.ver.outputs.publish }}
@@ -85,8 +87,22 @@ jobs:
           { echo "version=$VER"; echo "publish=$PUB"; } >> "$GITHUB_OUTPUT"
           echo "version=$VER publish=$PUB"
 
+      # The pinned clang22 (components/clang22/version), unpacked once by fetch_clang22.sh and kept.
+      - name: Cache the pinned clang22
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/mavergreen-clang22
+          key: clang22-${{ runner.os }}-${{ hashFiles('components/clang22/version') }}
+
+      # Every host-agnostic test runs here and none may skip; the macOS-only ones run in vm-test.
       - name: Run the repo's tests
-        run: sh "$SHIPYARD_SCRIPTS/run-repo-tests.sh"
+        run: sh "$SHIPYARD_SCRIPTS/run-repo-tests.sh" --strict-host
+
+      - name: clang22's Mach-O readers, for the steps that read the pkg
+        run: |
+          set -eu
+          CL="$(sh "$SHIPYARD_SCRIPTS/fetch_clang22.sh" "$PWD/components/clang22")"
+          { echo "LIPO=$CL/bin/llvm-lipo"; echo "OTOOL=$CL/bin/llvm-otool"; echo "NM=$CL/bin/llvm-nm"; } >> "$GITHUB_ENV"
 
       # The updater carries the release's version, which Sparkle compares with the feed's. x86_64 for
       # 10.9 only, like Porthole's: this preset installs only where Porthole does.
@@ -152,6 +168,73 @@ jobs:
           name: onepassword
           path: ${{ env.ONEP_DIST_DIR }}/*
 
+  # On Mac OS X 10.9: the tests that read the built pkg with pkgutil and PlistBuddy, and materialize the
+  # app with Porthole (checked out beside, as on a developer's box). bats is Debian's bats-core from
+  # the runner's apt, unpacked; cmake and shipyard are the family's pkgs (build_pkg.sh finds shipyard
+  # through shipyard-cmake). The guest has no git, so the pkg's file times come from SOURCE_DATE_EPOCH.
+  vm-test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v7
+        with:
+          repository: Mavergreen/porthole
+          path: porthole
+          persist-credentials: false
+
+      - name: Install mavericks-shipyard
+        uses: Mavergreen/shipyard/.github/actions/install@v1
+
+      # On Linux, install@v1 installs nothing and leaves SHIPYARD_SCRIPTS in its own checkout, whose
+      # components/cmake/version is the cmake its shipyard pkg requires.
+      - name: Stage bats, cmake and shipyard
+        run: |
+          set -eu
+          mkdir -p deps
+          fetch() { sh "$SHIPYARD_SCRIPTS/fetch-release-pkg.sh" "$@" deps; }
+          cm="$(tr -d '[:space:]' < "$SHIPYARD_SCRIPTS/../components/cmake/version")"
+          fetch cmake "$cm" "cmake-$cm.pkg"
+          sv="${SHIPYARD_VERSION:?install@v1 named no shipyard release}"
+          fetch shipyard "v$sv" "mavericks-shipyard-$sv.pkg"
+          (cd "$RUNNER_TEMP" && apt-get download bats)
+          dpkg-deb -x "$RUNNER_TEMP"/bats_*.deb deps/bats
+          git log -1 --format=%ct > deps/source-date-epoch
+          ls deps
+
+      - name: On Mac OS X 10.9, run the macOS-only tests
+        uses: Mavergreen/mavericks-vm@v1
+        with:
+          image-key: ${{ secrets.MAVERICKS_VM_KEY }}
+          run: |
+            set -eu
+            sw_vers
+            sudo -n true || { echo "the guest's user cannot sudo without a password, and installer needs root"; exit 1; }
+            for p in deps/cmake-*.pkg deps/mavericks-shipyard-*.pkg; do
+              sudo installer -pkg "$p" -target /
+            done
+            export PATH="/usr/local/mavergreen/bin:$PATH" PORTHOLE_DIR="$PWD/porthole"
+            SOURCE_DATE_EPOCH="$(cat deps/source-date-epoch)"; export SOURCE_DATE_EPOCH
+            TMPDIR="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"; export TMPDIR
+            # Every macOS-only test, and none may skip: here is where it runs.
+            n=0 bad=
+            for t in tests/*.bats; do
+              grep -q '^# platform: macOS-only' "$t" || continue
+              n=$((n + 1))
+              if deps/bats/usr/bin/bats "$t" > "$TMPDIR/t.log" 2>&1 && ! grep -q '^ok [0-9][0-9]* .*# skip' "$TMPDIR/t.log"; then
+                echo "PASS $t"
+              else
+                echo "FAIL $t"; sed 's/^/    | /' "$TMPDIR/t.log"; bad=1
+              fi
+            done
+            [ "$n" -gt 0 ] || { echo "no macOS-only test found"; exit 1; }
+            [ -z "$bad" ] || exit 1
+            echo "$n macOS-only test files passed on $(sw_vers -productVersion)"
+
   # Before anything is published: no log of this run, and no file about to be released, carries a
   # piece of the signing key. publish-release.yml looks for this job's record on any signed release.
   scan:
@@ -167,7 +250,7 @@ jobs:
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
 
   publish:
-    needs: [build, scan]
+    needs: [build, vm-test, scan]
     if: needs.build.outputs.publish == 'true'
     permissions:
       contents: write

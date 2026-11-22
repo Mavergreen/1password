@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.16)
 project(OnePasswordUpdater LANGUAGES OBJC)
 
 find_package(MavericksShipyard REQUIRED)
+# Built by the pinned clang22 (build/build-updater.sh), not Apple's clang: on Linux there is none.
+set(MAVERICKS_REQUIRE_APPLECLANG OFF)
 include(Mavericks)
 include(MavericksSparkle)
 

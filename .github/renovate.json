@@ -10,6 +10,15 @@
       "depNameTemplate": "1password",
       "datasourceTemplate": "deb",
       "registryUrlTemplate": "https://downloads.1password.com/linux/debian/amd64?suite=stable&components=main&binaryArch=amd64"
+    },
+    {
+      "customType": "regex",
+      "description": "clang22, the compiler the Sparkle updater is built with (build/build-updater.sh); one bare release tag. A bump rebuilds the updater in CI; it ships with the next release.",
+      "managerFilePatterns": ["/^components/clang22/version$/"],
+      "matchStrings": ["^(?<currentValue>\\S+)\\s*$"],
+      "depNameTemplate": "Mavergreen/clang-22",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-mavericks\\.(?<build>\\d+)$"
     }
   ],
   "packageRules": [
