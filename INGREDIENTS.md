@@ -18,5 +18,6 @@ you want to name a release for.
 
 ## Conformance deviations
 
+- no-standalone: a Porthole preset, which the family lists as having no standalone form. Its tree is a recipe (the preset conf and menu manifest) plus glue that names the installed tree; the app itself is generated on the Mac by the installed Porthole at install time, so an unpacked directory holds nothing that runs. Reconsider if a preset ever ships a runnable app in its payload.
 - install-path:Library/Application*/Mozilla/NativeMessagingHosts/com.1password.1password.json: Momiji and PowerFox find a native-messaging host only by a manifest in `Library/Application Support/Mozilla/NativeMessagingHosts/`, a place Firefox dictates, so the pkg installs `com.1password.1password.json` there for the 1Password extension. The manifest names the bridge in this product's tree, `usr/local/mavergreen/1password/libexec/op-browser-bridge`, and is listed in the manifest's `outside`, so uninstall removes it.
 - on-target: no 10.9 acceptance job yet; exit: a release.yml job on Mavergreen/mavericks-vm@v1 that installs this run's pkg in the guest and runs what it ships, which publish needs
