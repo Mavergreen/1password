@@ -68,3 +68,10 @@ stub_engine() {
   grep -q 'PORTHOLE_ENGINE_BIN:-/Applications/Porthole.app/Contents/Resources/engine/bin' "$REPO/bin/op"
   grep -q 'PORTHOLE_ENGINE_BIN:-/Applications/Porthole.app/Contents/Resources/engine/bin' "$REPO/packaging/macos/op-browser-bridge"
 }
+
+# Quitting a Mac app stops it. A 1Password left running in its container after Quit locks itself, and
+# then the extension's "Open 1Password" asks it to show its lock screen, which no viewer displays. Once
+# stopped, the extension opens onepassword://, which launches the app.
+@test "quitting the app stops its container, as quitting a Mac app stops it" {
+  [ "$(conf LIFECYCLE)" = ondemand ]
+}
