@@ -193,6 +193,27 @@ stub_updater() {
   [[ "$output" == *"no updater .app"* ]] || false
 }
 
+# Bad arguments are refused before anything slow or fallible runs (locating shipyard runs cmake), so
+# the refusal is the same whatever state shipyard is in -- it flaked once when it wasn't.
+@test "UPD_APP naming no updater fails the build even when shipyard can't be located" {
+  mkdir -p "$WORK/fakebin"
+  printf '#!/bin/sh\necho "refused" >&2\nexit 1\n' > "$WORK/fakebin/shipyard-cmake"; chmod +x "$WORK/fakebin/shipyard-cmake"
+  run env -i HOME="$HOME" TMPDIR="$WORK" PATH="$WORK/fakebin:/usr/bin:/bin" UPD_APP="$WORK/nothing-here.app" \
+    sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg"
+  [ "$status" -ne 0 ] || return 1
+  [[ "$output" == *"no updater .app"* ]] || { echo "$output"; false; }
+}
+
+@test "build_pkg.sh leaves no temporary directories behind" {
+  mkdir -p "$WORK/tmp"
+  run env TMPDIR="$WORK/tmp" sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out.pkg"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [ -z "$(ls "$WORK/tmp")" ] || { ls "$WORK/tmp"; false; }
+  run env TMPDIR="$WORK/tmp" UPD_APP="$WORK/nothing-here.app" sh "$REPO/packaging/macos/build_pkg.sh" 0.0.0 "$WORK/out2.pkg"
+  [ "$status" -ne 0 ] || return 1
+  [ -z "$(ls "$WORK/tmp")" ] || { ls "$WORK/tmp"; false; }
+}
+
 # The old op installed these to serve the SSH agent and to watch for prompts; the app does both now.
 @test "postinstall removes the old op's LaunchAgents, and only those" {
   e="$WORK/v/Applications/Porthole.app/Contents/Resources/engine/bin"; mkdir -p "$e"

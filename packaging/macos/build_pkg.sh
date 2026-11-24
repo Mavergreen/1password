@@ -11,8 +11,14 @@ set -eu
 VERSION=$1; OUT=$2
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
+# Arguments first: a refusal must not depend on locating shipyard, which runs cmake.
+if [ -n "${UPD_APP:-}" ] && [ ! -d "$UPD_APP" ]; then
+  echo "build_pkg: UPD_APP set but no updater .app at $UPD_APP" >&2; exit 1
+fi
 . "$REPO/build/msc.sh"
 
+ROOT="" SCR="" COMPONENT_DIR=""
+trap 'rm -rf "$ROOT" "$SCR" "$COMPONENT_DIR"' EXIT
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/1pm-preset.XXXXXX")
 T="$ROOT/usr/local/mavergreen/1password"
 install -d "$T/bin" "$T/libexec" "$T/share/porthole/presets"
@@ -38,7 +44,6 @@ set -- --stage "$ROOT" --product 1password --name "1Password for Mavericks" \
   --scripts-out "$SCR"
 # The Sparkle updater (build/build-updater.sh), and its daily check: releases reach installed Macs.
 if [ -n "${UPD_APP:-}" ]; then
-  [ -d "$UPD_APP" ] || { echo "build_pkg: UPD_APP set but no updater .app at $UPD_APP" >&2; exit 1; }
   set -- "$@" --updater-app "$UPD_APP"
 fi
 sh "$SHIPYARD/stage_product.sh" "$@"
