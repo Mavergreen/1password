@@ -4,15 +4,14 @@ name: release
 # <1password-version>-mavericks.N. 1Password has no public version feed, so UPSTREAM_VERSION is
 # HAND-bumped (the container floats to latest at first launch anyway -- UPDATE=float -- so the number
 # just names the release). The shipped .pkg is small: the preset conf + menu manifest + the bin/op CLI
-# (no compiler, no viewer, no container). Three entry points:
+# (no compiler, no viewer, no container). The version is the declared port scheme's (INGREDIENTS.md
+# ## Versioning), derived once by version-check. Two entry points:
 #   - push to main        : build + gate; if UPSTREAM_VERSION has no release yet, auto-cut -mavericks.1
-#   - a *-mavericks.* tag  : publish that exact version
 #   - workflow_dispatch(local_release=true) : cut a -mavericks.(N+1) repackage
 
 on:
   push:
     branches: [main]
-    tags: ['*-mavericks.*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -26,7 +25,7 @@ permissions:
   contents: write
 
 # Only a pull_request supersedes -- keyed per ref, so a force-push replaces its own predecessor.
-# Everything else (a branch push, a *-mavericks.* tag, a workflow_dispatch) is keyed per RUN and is
+# Everything else (a branch push, a workflow_dispatch) is keyed per RUN and is
 # therefore alone in its group: never queued, never evicted, never cancelled.
 #
 # cancel-in-progress:false was never the protection it looked like: it protects the RUNNING job and
@@ -35,7 +34,7 @@ permissions:
 # run that evicted it.
 #
 # A push to main HERE CAN PUBLISH (an upstream with no release yet auto-cuts -mavericks.1), and
-# concurrency is resolved when a run is queued -- before the ver step decides whether this one
+# concurrency is resolved when a run is queued -- before version-check decides whether this one
 # releases -- so cancelling the run would cancel the publish job with it.
 concurrency:
   group: >-
@@ -44,13 +43,51 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The one place the version is decided: the declared port scheme's tag (release-version.sh), and
+  # whether this run publishes it. A local_release dispatch cuts N+1 and publishes; otherwise only a new
+  # upstream, whose tag is not minted yet, publishes, and only from main. check-release-version.sh
+  # refuses a mismatched version, and a publishing run whose notes are missing
+  # (release-notes/<tag>/changes/, unless only pins moved).
+  version-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: { contents: read }
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      publish: ${{ steps.tag.outputs.publish }}
+      mode: ${{ steps.tag.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }   # the -mavericks.N tags the version counts
+
+      - name: Install mavericks-shipyard
+        uses: Mavergreen/shipyard/.github/actions/install@v1
+
+      - id: tag
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          LOCAL_RELEASE: ${{ inputs.local_release }}
+        run: |
+          set -eu
+          mode="$(sh "$SHIPYARD_SCRIPTS/release-mode.sh")"
+          t="$(sh "$SHIPYARD_SCRIPTS/release-version.sh" --product 1password --mode "$mode")"
+          pub=no
+          if [ "$GITHUB_REF_NAME" = main ] && [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            if [ "$mode" = local ] || ! git rev-parse -q --verify "refs/tags/$t" >/dev/null; then pub=yes; fi
+          fi
+          sh "$SHIPYARD_SCRIPTS/check-release-version.sh" --product 1password --version "$t" --sha "$GITHUB_SHA" \
+            --mode "$mode" --publishing "$pub"
+          { echo "tag=$t"; echo "publish=$pub"; echo "mode=$mode"; } >> "$GITHUB_OUTPUT"
+          echo "version=$t publish=$pub mode=$mode"
+
   build:
+    needs: version-check
     # Linux: the pinned clang22 cross-builds the updater against the 10.9 SDK and shipyard's stevedore
     # seams make the pkg. The tests that read the pkg with Apple's tools run on 10.9 in vm-test.
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
-      publish: ${{ steps.ver.outputs.publish }}
+    env:
+      VER: ${{ needs.version-check.outputs.tag }}
+      PUB: ${{ needs.version-check.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -66,26 +103,6 @@ jobs:
         run: |
           echo "MAVERICKS_BUILD_ROOT=$RUNNER_TEMP/mm-build" >> "$GITHUB_ENV"
           echo "ONEP_DIST_DIR=$RUNNER_TEMP/mm-build/onep-build/dist" >> "$GITHUB_ENV"
-
-      - name: Decide version + whether this run publishes
-        id: ver
-        run: |
-          set -eu
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            VER="$GITHUB_REF_NAME"; PUB=true
-          else
-            MODE=auto
-            if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "${{ inputs.local_release }}" = "true" ]; then
-              MODE=local
-            fi
-            OUT="$(sh build/version.sh "$MODE")"
-            VER="$(printf '%s\n' "$OUT" | sed -n 's/^FULL=//p')"
-            REL="$(printf '%s\n' "$OUT" | sed -n 's/^RELEASE=//p')"
-            [ "$GITHUB_REF_NAME" = main ] || REL=no
-            [ "$REL" = yes ] && PUB=true || PUB=false
-          fi
-          { echo "version=$VER"; echo "publish=$PUB"; } >> "$GITHUB_OUTPUT"
-          echo "version=$VER publish=$PUB"
 
       # The pinned clang22 (components/clang22/version), unpacked once by fetch_clang22.sh and kept.
       - name: Cache the pinned clang22
@@ -117,29 +134,28 @@ jobs:
         run: |
           set -eu
           app="$(basename "$(sh "$SHIPYARD_SCRIPTS/product-name.sh" updater-app 1password)")"
-          sh build/build-updater.sh "${{ steps.ver.outputs.version }}" "$RUNNER_TEMP/$app"
+          sh build/build-updater.sh "$VER" "$RUNNER_TEMP/$app"
           echo "UPD_APP=$RUNNER_TEMP/$app" >> "$GITHUB_ENV"
 
       - name: Build the preset .pkg (conf + menu manifest + op CLI + updater)
         run: |
           set -eu
-          sh packaging/macos/build_pkg.sh "${{ steps.ver.outputs.version }}" \
-             "$ONEP_DIST_DIR/mavericks-1password-${{ steps.ver.outputs.version }}.pkg"
+          sh packaging/macos/build_pkg.sh "$VER" \
+             "$ONEP_DIST_DIR/mavericks-1password-$VER.pkg"
 
       # --min-os must say what the pkg declares (set_install_floor.sh in packaging/macos/build_pkg.sh).
       - name: Generate release notes
         run: |
           set -eu
           sh "$SHIPYARD_SCRIPTS/release-notes.sh" \
-            --tag "${{ steps.ver.outputs.version }}" --version "${{ steps.ver.outputs.version }}" \
+            --tag "$VER" --version "$VER" \
             --product 'Linux 1Password' --min-os 10.9.5 --out "$ONEP_DIST_DIR/RELEASE_NOTES.md"
 
       - name: Sign the pkg and write the feed
-        if: steps.ver.outputs.publish == 'true'
+        if: needs.version-check.outputs.publish == 'yes'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}   # sign_and_appcast.sh fetches ed25519-sign via `gh`
-          VER: ${{ steps.ver.outputs.version }}
         run: |
           set -eu
           # printenv, not [ -n "$SPARKLE_PRIVATE_KEY" ]: the shell never expands the key, so no trace can print it
@@ -154,18 +170,15 @@ jobs:
       # floor and version scheme (INGREDIENTS.md "Conformance deviations" excuses the rest)? A run that
       # doesn't publish has no signed feed, so it checks against an unsigned stand-in.
       - name: Artifact conformance
-        env:
-          PUB: ${{ steps.ver.outputs.publish }}
-          VER: ${{ steps.ver.outputs.version }}
         run: |
           set -eu
-          [ "$PUB" = true ] || sh "$SHIPYARD_SCRIPTS/stand-in-feeds.sh" "$ONEP_DIST_DIR" "$VER"
+          [ "$PUB" = yes ] || sh "$SHIPYARD_SCRIPTS/stand-in-feeds.sh" "$ONEP_DIST_DIR" "$VER"
           sh "$SHIPYARD_SCRIPTS/artifact-facts.sh" "$ONEP_DIST_DIR" "$VER" \
             | sh "$SHIPYARD_SCRIPTS/check-artifact-conformance.sh"
 
       - name: Assert the feed upgrades installed clients
-        if: steps.ver.outputs.publish == 'true'
-        run: sh "$SHIPYARD_SCRIPTS/assert_appcast_upgradeable.sh" --appcast "$ONEP_DIST_DIR/1password.xml" --version "${{ steps.ver.outputs.version }}"
+        if: needs.version-check.outputs.publish == 'yes'
+        run: sh "$SHIPYARD_SCRIPTS/assert_appcast_upgradeable.sh" --appcast "$ONEP_DIST_DIR/1password.xml" --version "$VER"
 
       - name: The build must not have written into the source tree
         run: sh "$SHIPYARD_SCRIPTS/assert-tree-clean.sh"
@@ -245,8 +258,8 @@ jobs:
   # Before anything is published: no log of this run, and no file about to be released, carries a
   # piece of the signing key. publish-release.yml looks for this job's record on any signed release.
   scan:
-    needs: [build]
-    if: always() && (needs.build.outputs.publish == 'true')   # a build that fails after signing left logs too; scan them
+    needs: [version-check, build]
+    if: always() && (needs.version-check.outputs.publish == 'yes')   # a build that fails after signing left logs too; scan them
     permissions:
       actions: read     # this run's job logs
       contents: read
@@ -257,11 +270,13 @@ jobs:
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
 
   publish:
-    needs: [build, vm-test, scan]
-    if: needs.build.outputs.publish == 'true'
+    needs: [version-check, build, vm-test, scan]
+    if: needs.version-check.outputs.publish == 'yes'
     permissions:
       contents: write
     uses: Mavergreen/shipyard/.github/workflows/publish-release.yml@v1
     with:
-      version: ${{ needs.build.outputs.version }}
+      version: ${{ needs.version-check.outputs.tag }}
+      product: 1password
+      release-mode: ${{ needs.version-check.outputs.mode }}
       artifact: onepassword

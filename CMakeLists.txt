@@ -8,7 +8,8 @@ set(MAVERICKS_REQUIRE_APPLECLANG OFF)
 include(Mavericks)
 include(MavericksSparkle)
 
-# The release's version (the tag, or build/version.sh): the updater compares it with the feed's.
+# The release's version (version-check's tag in CI; derived here for a local build): the updater
+# compares it with the feed's.
 if(NOT ONEP_VERSION)
   mavericks_resolve_version(ONEP_VERSION)
 endif()
